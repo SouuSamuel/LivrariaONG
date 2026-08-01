@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useState } from "react";
 import {
   View,
   Text,
@@ -10,15 +10,16 @@ import {
   TextInput,
   Modal,
   ScrollView,
+  Image,
 } from "react-native";
-import { useNavigation } from "@react-navigation/native";
+import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import { CameraView, Camera } from "expo-camera";
 import {
-  criarEmprestimo,
+  criarEmprestimoComTransacao,
   buscarEmprestimos,
   registrarDevolucao,
 } from "../../services/emprestimos";
-import { buscarLivros } from "../../services/livros";
+import { buscarLivros, calcularQuantidadeDisponivel, livroTemExemplarDisponivel } from "../../services/livros";
 import { buscarPessoas } from "../../services/pessoas";
 import { Emprestimo, Livro, Pessoa } from "../../types";
 
@@ -46,21 +47,33 @@ export default function EmprestimosScreen() {
   const [etapa, setEtapa] = useState<"scan" | "livro" | "pessoa" | "confirmar">("scan");
   const [buscaLivro, setBuscaLivro] = useState("");
   const [buscaPessoa, setBuscaPessoa] = useState("");
+  const [erro, setErro] = useState("");
   const navigation = useNavigation<any>();
 
-  useEffect(() => { carregar(); }, []);
+  useFocusEffect(
+    useCallback(() => {
+      carregar();
+    }, [])
+  );
 
   const carregar = async () => {
     setLoading(true);
-    const [emps, livs, pess] = await Promise.all([
-      buscarEmprestimos(),
-      buscarLivros(),
-      buscarPessoas(),
-    ]);
-    setEmprestimos(emps);
-    setLivros(livs);
-    setPessoas(pess);
-    setLoading(false);
+    setErro("");
+    try {
+      const [emps, livs, pess] = await Promise.all([
+        buscarEmprestimos(),
+        buscarLivros(),
+        buscarPessoas(),
+      ]);
+      setEmprestimos(emps);
+      setLivros(livs);
+      setPessoas(pess);
+    } catch (e) {
+      console.log("Erro ao carregar empréstimos:", e);
+      setErro("Não foi possível carregar os dados de empréstimo.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   const abrirForm = async () => {
@@ -82,6 +95,8 @@ export default function EmprestimosScreen() {
     }
   };
 
+  const emprestimosAtivos = emprestimos.filter((e) => e.status === "Emprestado");
+
   const onScan = async ({ data }: { data: string }) => {
     if (!scanAtivo) return;
     setScanAtivo(false);
@@ -100,10 +115,10 @@ export default function EmprestimosScreen() {
     setBuscandoLivro(false);
 
     if (livroEncontrado) {
-      if (livroEncontrado.status !== "Disponível") {
+      if (!livroTemExemplarDisponivel(livroEncontrado, emprestimosAtivos)) {
         Alert.alert(
           "Livro indisponível",
-          `"${livroEncontrado.titulo}" já está emprestado.`
+          `"${livroEncontrado.titulo}" não possui exemplares livres no momento.`
         );
         return;
       }
@@ -140,27 +155,22 @@ export default function EmprestimosScreen() {
     if (!livroSelecionado || !pessoaSelecionada) return;
     setSalvando(true);
 
-    const hoje = new Date();
-    const prevista = new Date();
-    prevista.setDate(hoje.getDate() + parseInt(diasPrazo));
+    try {
+      await criarEmprestimoComTransacao({
+        livro: livroSelecionado,
+        pessoa: pessoaSelecionada,
+        diasPrazo: parseInt(diasPrazo, 10),
+      });
 
-    await criarEmprestimo({
-      livroId: livroSelecionado.id!,
-      nomeLivro: livroSelecionado.titulo,
-      pessoaId: pessoaSelecionada.id!,
-      nomePessoa: pessoaSelecionada.nome,
-      telefonePessoa: pessoaSelecionada.telefone,
-      dataEmprestimo: hoje.toISOString(),
-      dataPrevista: prevista.toISOString(),
-      dataDevolucao: null,
-      diasPrazo: parseInt(diasPrazo),
-      status: "Emprestado",
-    });
-
-    setSalvando(false);
-    setModalForm(false);
-    Alert.alert("✅ Empréstimo registrado!", `"${livroSelecionado.titulo}" emprestado para ${pessoaSelecionada.nome}.`);
-    carregar();
+      setModalForm(false);
+      Alert.alert("✅ Empréstimo registrado!", `"${livroSelecionado.titulo}" emprestado para ${pessoaSelecionada.nome}.`);
+      carregar();
+    } catch (e: any) {
+      console.log("Erro ao confirmar empréstimo:", e);
+      Alert.alert("Empréstimo não registrado", e?.message || "Não foi possível registrar o empréstimo.");
+    } finally {
+      setSalvando(false);
+    }
   };
 
   const devolver = (emp: Emprestimo) => {
@@ -172,8 +182,13 @@ export default function EmprestimosScreen() {
         {
           text: "Confirmar",
           onPress: async () => {
-            await registrarDevolucao(emp.id!);
-            carregar();
+            try {
+              await registrarDevolucao(emp.id!);
+              carregar();
+            } catch (e: any) {
+              console.log("Erro ao registrar devolução:", e);
+              Alert.alert("Erro", e?.message || "Não foi possível registrar a devolução.");
+            }
           },
         },
       ]
@@ -196,10 +211,10 @@ export default function EmprestimosScreen() {
     )
     .sort((a, b) => new Date(b.dataEmprestimo).getTime() - new Date(a.dataEmprestimo).getTime());
 
-  const livrosDisponiveis = livros.filter(
-    (l) =>
-      l.status === "Disponível" &&
-      l.titulo.toLowerCase().includes(buscaLivro.toLowerCase())
+  const livrosParaSelecao = livros.filter((l) =>
+    `${l.titulo} ${l.autor} ${l.isbn} ${l.codigoBarras}`
+      .toLowerCase()
+      .includes(buscaLivro.toLowerCase())
   );
 
   const pessoasFiltradas = pessoas.filter((p) =>
@@ -263,6 +278,13 @@ export default function EmprestimosScreen() {
       {/* LISTA */}
       {loading ? (
         <ActivityIndicator color={VERDE} size="large" style={{ marginTop: 40 }} />
+      ) : erro ? (
+        <View style={s.vazio}>
+          <Text style={s.vazioTxt}>{erro}</Text>
+          <TouchableOpacity style={[s.btn, { marginTop: 12, maxWidth: 180 }]} onPress={carregar}>
+            <Text style={s.btnText}>Tentar novamente</Text>
+          </TouchableOpacity>
+        </View>
       ) : empFiltrados.length === 0 ? (
         <View style={s.vazio}>
           <Text style={s.vazioTxt}>Nenhum empréstimo encontrado</Text>
@@ -383,21 +405,43 @@ export default function EmprestimosScreen() {
                 style={s.input}
                 placeholderTextColor="#aaa"
               />
-              {livrosDisponiveis.length === 0 ? (
+              {livrosParaSelecao.length === 0 ? (
                 <Text style={{ color: "#aaa", textAlign: "center", marginTop: 20 }}>
-                  Nenhum livro disponível
+                  Nenhum livro encontrado
                 </Text>
               ) : (
-                livrosDisponiveis.map((l) => (
-                  <TouchableOpacity
-                    key={l.id}
-                    style={[s.opcaoCard, livroSelecionado?.id === l.id && s.opcaoCardAtivo]}
-                    onPress={() => setLivroSelecionado(l)}
-                  >
-                    <Text style={s.opcaoTitulo}>{l.titulo}</Text>
-                    <Text style={s.opcaoSub}>{l.autor}</Text>
-                  </TouchableOpacity>
-                ))
+                livrosParaSelecao.map((l) => {
+                  const quantidadeLivre = calcularQuantidadeDisponivel(l, emprestimosAtivos);
+                  const disponivel = quantidadeLivre > 0;
+                  return (
+                    <TouchableOpacity
+                      key={l.id}
+                      style={[
+                        s.opcaoCard,
+                        livroSelecionado?.id === l.id && s.opcaoCardAtivo,
+                        !disponivel && s.opcaoCardIndisponivel,
+                      ]}
+                      onPress={() => disponivel && setLivroSelecionado(l)}
+                      disabled={!disponivel}
+                    >
+                      {l.imagem ? (
+                        <Image source={{ uri: l.imagem }} style={s.opcaoCapa} />
+                      ) : (
+                        <View style={[s.opcaoCapa, s.opcaoCapaVazia]}>
+                          <Text style={{ fontSize: 20 }}>📖</Text>
+                        </View>
+                      )}
+                      <View style={{ flex: 1 }}>
+                        <Text style={s.opcaoTitulo}>{l.titulo}</Text>
+                        <Text style={s.opcaoSub}>{l.autor}</Text>
+                        {l.isbn ? <Text style={s.opcaoMeta}>ISBN: {l.isbn}</Text> : null}
+                        <Text style={[s.opcaoMeta, { color: disponivel ? VERDE : VERMELHO }]}>
+                          {disponivel ? `${quantidadeLivre} exemplar(es) livre(s)` : "Indisponível"}
+                        </Text>
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })
               )}
               <View style={[s.row, { marginTop: 16 }]}>
                 <TouchableOpacity style={[s.btn, s.btnOutline]} onPress={() => setModalForm(false)}>
@@ -573,10 +617,15 @@ const s = StyleSheet.create({
   opcaoCard: {
     backgroundColor: "#fff", padding: 14, borderRadius: 12,
     marginBottom: 8, borderWidth: 1, borderColor: "#e0e0e0",
+    flexDirection: "row", gap: 10, alignItems: "center",
   },
   opcaoCardAtivo: { borderColor: VERDE, backgroundColor: "#E1F5EE" },
+  opcaoCardIndisponivel: { opacity: 0.55 },
+  opcaoCapa: { width: 44, height: 58, borderRadius: 6 },
+  opcaoCapaVazia: { backgroundColor: "#f0f0f0", alignItems: "center", justifyContent: "center" },
   opcaoTitulo: { fontWeight: "bold", fontSize: 14, color: "#1a1a18" },
   opcaoSub: { fontSize: 12, color: "#666", marginTop: 2 },
+  opcaoMeta: { fontSize: 11, color: "#888", marginTop: 2 },
   resumoCard: {
     backgroundColor: "#fff", borderRadius: 12, padding: 16,
     marginBottom: 16, borderWidth: 0.5, borderColor: "#e0e0e0",

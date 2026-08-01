@@ -9,13 +9,37 @@ export default function LoginScreen() {
   const [senha, setSenha] = useState('');
   const [loading, setLoading] = useState(false);
 
+  const mensagemErroLogin = (codigo?: string) => {
+    switch (codigo) {
+      case 'auth/invalid-email':
+        return 'O e-mail digitado não é válido.';
+      case 'auth/invalid-credential':
+      case 'auth/user-not-found':
+      case 'auth/wrong-password':
+        return 'E-mail ou senha incorretos.';
+      case 'auth/user-disabled':
+        return 'Este usuário está desativado no Firebase.';
+      case 'auth/operation-not-allowed':
+        return 'Login por e-mail e senha não está ativado no Firebase Authentication.';
+      case 'auth/network-request-failed':
+        return 'Falha de conexão. Verifique sua internet e tente novamente.';
+      case 'auth/invalid-api-key':
+      case 'auth/app-not-authorized':
+        return 'Configuração do Firebase inválida para este app.';
+      default:
+        return codigo ? `Não foi possível entrar. Código: ${codigo}` : 'Não foi possível entrar.';
+    }
+  };
+
   const handleLogin = async () => {
-    if (!email || !senha) { Alert.alert('Preencha e-mail e senha'); return; }
+    const emailLimpo = email.trim();
+    if (!emailLimpo || !senha) { Alert.alert('Preencha e-mail e senha'); return; }
     setLoading(true);
     try {
-      await signInWithEmailAndPassword(auth, email, senha);
-    } catch (e) {
-      Alert.alert('Erro', 'E-mail ou senha incorretos');
+      await signInWithEmailAndPassword(auth, emailLimpo, senha);
+    } catch (e: any) {
+      console.log('Erro no login:', e?.code, e?.message);
+      Alert.alert('Erro no login', mensagemErroLogin(e?.code));
     } finally {
       setLoading(false);
     }

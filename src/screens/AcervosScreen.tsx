@@ -11,9 +11,14 @@ import {
   ScrollView,
   Image,
 } from "react-native";
-import { buscarLivros } from "../services/livros";
+import {
+  buscarLivrosPagina,
+  buscarLivrosPorTexto,
+  livroTemExemplarDisponivel,
+} from "../services/livros";
 import { buscarEmprestimos } from "../services/emprestimos";
 import { Livro, Emprestimo } from "../types";
+import type { DocumentData, QueryDocumentSnapshot } from "firebase/firestore";
 
 const VERDE = "#1D9E75";
 const AMBER = "#BA7517";
@@ -25,25 +30,63 @@ export default function AcervoScreen({ navigation }: any) {
   const [busca, setBusca] = useState("");
   const [filtro, setFiltro] = useState<"todos" | "disponivel" | "emprestado">("todos");
   const [livroDetalhe, setLivroDetalhe] = useState<Livro | null>(null);
+  const [erro, setErro] = useState("");
+  const [ultimoDoc, setUltimoDoc] = useState<QueryDocumentSnapshot<DocumentData> | null>(null);
+  const [temMais, setTemMais] = useState(false);
+  const [carregandoMais, setCarregandoMais] = useState(false);
 
-  useEffect(() => { carregar(); }, []);
+  useEffect(() => {
+    const timer = setTimeout(() => carregar(busca, filtro), 350);
+    return () => clearTimeout(timer);
+  }, [busca, filtro]);
 
-  const carregar = async () => {
+  const carregar = async (termo = "", filtroAtual = filtro) => {
     setLoading(true);
-    const [livs, emps] = await Promise.all([
-      buscarLivros(),
-      buscarEmprestimos(),
-    ]);
-    setLivros(livs);
-    setEmprestimos(emps);
-    setLoading(false);
+    setErro("");
+    try {
+      const empsPromise = buscarEmprestimos();
+      const precisaAcervoCompleto = termo.trim() || filtroAtual !== "todos";
+      const livsPromise = precisaAcervoCompleto
+        ? buscarLivrosPorTexto(termo)
+        : buscarLivrosPagina();
+      const [livsResultado, emps] = await Promise.all([livsPromise, empsPromise]);
+
+      if (Array.isArray(livsResultado)) {
+        setLivros(livsResultado);
+        setUltimoDoc(null);
+        setTemMais(false);
+      } else {
+        setLivros(livsResultado.livros);
+        setUltimoDoc(livsResultado.ultimoDoc);
+        setTemMais(livsResultado.temMais);
+      }
+      setEmprestimos(emps);
+    } catch (e) {
+      console.log("Erro ao carregar acervo:", e);
+      setErro("Não foi possível carregar o acervo.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const carregarMais = async () => {
+    if (!temMais || carregandoMais || busca.trim() || filtro !== "todos") return;
+    setCarregandoMais(true);
+    try {
+      const pagina = await buscarLivrosPagina(ultimoDoc);
+      setLivros((atuais) => [...atuais, ...pagina.livros]);
+      setUltimoDoc(pagina.ultimoDoc);
+      setTemMais(pagina.temMais);
+    } catch (e) {
+      console.log("Erro ao carregar mais livros do acervo:", e);
+      setErro("Não foi possível carregar mais livros.");
+    } finally {
+      setCarregandoMais(false);
+    }
   };
 
   const isDisponivel = (livro: Livro) => {
-    const empAtivo = emprestimos.find(
-      (e) => e.livroId === livro.id && e.status === "Emprestado"
-    );
-    return !empAtivo;
+    return livroTemExemplarDisponivel(livro, emprestimos);
   };
 
   const livrosFiltrados = livros
@@ -122,6 +165,13 @@ export default function AcervoScreen({ navigation }: any) {
       {/* LISTA */}
       {loading ? (
         <ActivityIndicator color={VERDE} size="large" style={{ marginTop: 40 }} />
+      ) : erro ? (
+        <View style={s.vazio}>
+          <Text style={s.vazioTxt}>{erro}</Text>
+          <TouchableOpacity style={[s.filtroBtnAtivo, { marginTop: 12, padding: 12, borderRadius: 10 }]} onPress={() => carregar(busca, filtro)}>
+            <Text style={s.filtroTxtAtivo}>Tentar novamente</Text>
+          </TouchableOpacity>
+        </View>
       ) : livrosFiltrados.length === 0 ? (
         <View style={s.vazio}>
           <Text style={s.vazioIcone}>📭</Text>
@@ -132,6 +182,13 @@ export default function AcervoScreen({ navigation }: any) {
           data={livrosFiltrados}
           keyExtractor={(i) => i.id!}
           contentContainerStyle={{ padding: 12 }}
+          onEndReached={carregarMais}
+          onEndReachedThreshold={0.3}
+          ListFooterComponent={
+            carregandoMais ? (
+              <ActivityIndicator color={VERDE} style={{ marginVertical: 16 }} />
+            ) : null
+          }
           renderItem={({ item }) => {
             const disponivel = isDisponivel(item);
             return (

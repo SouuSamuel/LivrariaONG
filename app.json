@@ -27,7 +27,16 @@
     "web": {
       "favicon": "./assets/favicon.png"
     },
-    "plugins": [],
+    "plugins": [
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Permita acessar suas fotos para escolher a capa do livro.",
+          "cameraPermission": "Permita acessar a câmera para fotografar a capa do livro.",
+          "microphonePermission": false
+        }
+      ]
+    ],
     "extra": {
       "eas": {
         "projectId": "8cec5bda-f7be-4458-902e-a307e421e072"

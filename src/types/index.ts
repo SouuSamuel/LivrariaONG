@@ -9,6 +9,12 @@ export interface Livro {
   categoria: string;
   status: 'Disponível' | 'Emprestado';
   imagem: string;
+  imagemStoragePath?: string;
+  quantidadeTotal?: number;
+  quantidadeDisponivel?: number;
+  quantidadeDisponivelInformada?: boolean;
+  indisponivelInformado?: boolean;
+  busca?: string;
   dataCadastro: string;
 }
 

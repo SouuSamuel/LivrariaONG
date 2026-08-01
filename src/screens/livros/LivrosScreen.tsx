@@ -13,8 +13,11 @@ import {
   Image,
 } from "react-native";
 import { CameraView, Camera } from "expo-camera";
-import { buscarLivros, adicionarLivro, excluirLivro } from "../../services/livros";
+import * as ImagePicker from "expo-image-picker";
+import { buscarLivrosPagina, buscarLivrosPorTexto, adicionarLivro, excluirLivro } from "../../services/livros";
+import { prepararImagemLivro, removerImagemLivro } from "../../services/imagens";
 import { Livro } from "../../types";
+import type { DocumentData, QueryDocumentSnapshot } from "firebase/firestore";
 
 const VERDE = "#1D9E75";
 
@@ -28,26 +31,66 @@ export default function LivrosScreen({ route }: any) {
   const [buscandoAPI, setBuscandoAPI] = useState(false);
   const [form, setForm] = useState<Partial<Livro>>({});
   const [salvando, setSalvando] = useState(false);
+  const [erro, setErro] = useState("");
+  const [ultimoDoc, setUltimoDoc] = useState<QueryDocumentSnapshot<DocumentData> | null>(null);
+  const [temMais, setTemMais] = useState(false);
+  const [carregandoMais, setCarregandoMais] = useState(false);
+  const [imagemLocalUri, setImagemLocalUri] = useState<string | null>(null);
+  const [uploadProgress, setUploadProgress] = useState(0);
 
   useEffect(() => {
-    carregar();
-  }, []);
+    const timer = setTimeout(() => carregar(busca), 350);
+    return () => clearTimeout(timer);
+  }, [busca]);
 
   // Recebe ISBN vindo da tela de empréstimos
   useEffect(() => {
     if (route?.params?.isbnParaCadastrar) {
       const isbn = route.params.isbnParaCadastrar;
       setForm({ isbn, codigoBarras: isbn, status: "Disponível" });
+      setImagemLocalUri(null);
       setModalForm(true);
       buscarPorISBN(isbn);
     }
   }, [route?.params?.isbnParaCadastrar]);
 
-  const carregar = async () => {
+  const carregar = async (termo = "") => {
     setLoading(true);
-    const data = await buscarLivros();
-    setLivros(data);
-    setLoading(false);
+    setErro("");
+    try {
+      if (termo.trim()) {
+        const data = await buscarLivrosPorTexto(termo);
+        setLivros(data);
+        setUltimoDoc(null);
+        setTemMais(false);
+      } else {
+        const pagina = await buscarLivrosPagina();
+        setLivros(pagina.livros);
+        setUltimoDoc(pagina.ultimoDoc);
+        setTemMais(pagina.temMais);
+      }
+    } catch (e) {
+      console.log("Erro ao carregar livros:", e);
+      setErro("Não foi possível carregar os livros. Tente novamente.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const carregarMais = async () => {
+    if (!temMais || carregandoMais || busca.trim()) return;
+    setCarregandoMais(true);
+    try {
+      const pagina = await buscarLivrosPagina(ultimoDoc);
+      setLivros((atuais) => [...atuais, ...pagina.livros]);
+      setUltimoDoc(pagina.ultimoDoc);
+      setTemMais(pagina.temMais);
+    } catch (e) {
+      console.log("Erro ao carregar mais livros:", e);
+      setErro("Não foi possível carregar mais livros.");
+    } finally {
+      setCarregandoMais(false);
+    }
   };
 
   const pedirPermissao = async () => {
@@ -60,6 +103,51 @@ export default function LivrosScreen({ route }: any) {
     if (!ok) return Alert.alert("Erro", "Sem permissão da câmera");
     setScanAtivo(true);
     setModalScan(true);
+  };
+
+  const abrirCameraCapa = async () => {
+    const permissao = await ImagePicker.requestCameraPermissionsAsync();
+    if (!permissao.granted) {
+      return Alert.alert("Permissão necessária", "Autorize a câmera para fotografar a capa.");
+    }
+
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ["images"],
+      allowsEditing: true,
+      aspect: [3, 4],
+      quality: 0.9,
+    });
+
+    if (!result.canceled && result.assets[0]?.uri) {
+      const uri = result.assets[0].uri;
+      setImagemLocalUri(uri);
+      setForm((f) => ({ ...f, imagem: uri, imagemStoragePath: undefined }));
+    }
+  };
+
+  const escolherCapaGaleria = async () => {
+    const permissao = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permissao.granted) {
+      return Alert.alert("Permissão necessária", "Autorize a galeria para escolher a capa.");
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ["images"],
+      allowsEditing: true,
+      aspect: [3, 4],
+      quality: 0.9,
+    });
+
+    if (!result.canceled && result.assets[0]?.uri) {
+      const uri = result.assets[0].uri;
+      setImagemLocalUri(uri);
+      setForm((f) => ({ ...f, imagem: uri, imagemStoragePath: undefined }));
+    }
+  };
+
+  const removerCapa = () => {
+    setImagemLocalUri(null);
+    setForm((f) => ({ ...f, imagem: "", imagemStoragePath: undefined }));
   };
 
   // Busca por ISBN direto (usado quando vem da tela de empréstimos)
@@ -181,28 +269,56 @@ export default function LivrosScreen({ route }: any) {
       return Alert.alert("Erro", "Preencha título e autor");
     }
     setSalvando(true);
-    await adicionarLivro({
-      ...(form as Livro),
-      status: "Disponível",
-      dataCadastro: new Date().toISOString(),
-    });
-    setSalvando(false);
-    setModalForm(false);
-    setForm({});
-    carregar();
-    Alert.alert("✅ Livro cadastrado!", "Agora você pode realizar o empréstimo.");
+    setUploadProgress(0);
+
+    let imagemPreparada: { dataUrl: string } | null = null;
+    let imagemEnviada: { storagePath?: string } | undefined;
+    try {
+      if (imagemLocalUri) {
+        imagemPreparada = await prepararImagemLivro(imagemLocalUri, setUploadProgress);
+      }
+
+      await adicionarLivro({
+        ...(form as Livro),
+        imagem: imagemPreparada?.dataUrl || form.imagem || "",
+        imagemStoragePath: undefined,
+        quantidadeTotal: form.quantidadeTotal || 1,
+        quantidadeDisponivel: form.quantidadeDisponivel || form.quantidadeTotal || 1,
+        status: "Disponível",
+        dataCadastro: new Date().toISOString(),
+      });
+
+      setModalForm(false);
+      setForm({});
+      setImagemLocalUri(null);
+      carregar(busca);
+      Alert.alert("✅ Livro cadastrado!", "Agora você pode realizar o empréstimo.");
+    } catch (e) {
+      console.log("Erro ao salvar livro:", e);
+      if (imagemEnviada?.storagePath) {
+        try {
+          await removerImagemLivro(imagemEnviada.storagePath);
+        } catch (erroRemocao) {
+          console.log("Erro ao remover imagem após falha:", erroRemocao);
+        }
+      }
+      Alert.alert("Erro", "Não foi possível cadastrar o livro. Nenhum registro incompleto foi salvo.");
+    } finally {
+      setSalvando(false);
+      setUploadProgress(0);
+    }
   };
 
-  const livrosFiltrados = livros.filter((l) =>
-    `${l.titulo} ${l.autor}`.toLowerCase().includes(busca.toLowerCase())
-  );
+  const livrosFiltrados = livros;
 
   return (
     <View style={s.container}>
       {/* HEADER */}
       <View style={s.header}>
         <Text style={s.titulo}>📚 Biblioteca ONG</Text>
-        <Text style={s.subtitulo}>{livros.length} livros cadastrados</Text>
+        <Text style={s.subtitulo}>
+          {busca.trim() ? `${livros.length} resultado(s)` : `${livros.length} livro(s) carregado(s)`}
+        </Text>
       </View>
 
       {/* BUSCA */}
@@ -224,6 +340,7 @@ export default function LivrosScreen({ route }: any) {
           style={[s.btn, s.btnOutline]}
           onPress={() => {
             setForm({ status: "Disponível" });
+            setImagemLocalUri(null);
             setModalForm(true);
           }}
         >
@@ -234,11 +351,20 @@ export default function LivrosScreen({ route }: any) {
       {/* LISTA */}
       {loading ? (
         <ActivityIndicator color={VERDE} size="large" style={{ marginTop: 40 }} />
+      ) : erro ? (
+        <View style={s.vazio}>
+          <Text style={s.vazioTxt}>{erro}</Text>
+          <TouchableOpacity style={[s.btn, { marginTop: 12, maxWidth: 180 }]} onPress={() => carregar(busca)}>
+            <Text style={s.btnText}>Tentar novamente</Text>
+          </TouchableOpacity>
+        </View>
       ) : livrosFiltrados.length === 0 ? (
         <View style={s.vazio}>
-          <Text style={s.vazioTxt}>Nenhum livro cadastrado</Text>
+          <Text style={s.vazioTxt}>
+            {busca.trim() ? "Nenhum livro encontrado" : "Nenhum livro cadastrado"}
+          </Text>
           <Text style={{ color: "#aaa", fontSize: 13, marginTop: 4 }}>
-            Escaneie ou cadastre manualmente
+            {busca.trim() ? "Revise o termo buscado" : "Escaneie ou cadastre manualmente"}
           </Text>
         </View>
       ) : (
@@ -246,6 +372,13 @@ export default function LivrosScreen({ route }: any) {
           data={livrosFiltrados}
           keyExtractor={(i) => i.id!}
           contentContainerStyle={{ padding: 12 }}
+          onEndReached={carregarMais}
+          onEndReachedThreshold={0.3}
+          ListFooterComponent={
+            carregandoMais ? (
+              <ActivityIndicator color={VERDE} style={{ marginVertical: 16 }} />
+            ) : null
+          }
           renderItem={({ item }) => (
             <TouchableOpacity
               style={s.card}
@@ -257,7 +390,7 @@ export default function LivrosScreen({ route }: any) {
                     style: "destructive",
                     onPress: async () => {
                       await excluirLivro(item.id!);
-                      carregar();
+                      carregar(busca);
                     },
                   },
                 ])
@@ -346,6 +479,31 @@ export default function LivrosScreen({ route }: any) {
               style={s.capaPreview}
               resizeMode="contain"
             />
+          ) : (
+            <View style={[s.capaPreview, s.capaPreviewVazia]}>
+              <Text style={{ fontSize: 42 }}>📖</Text>
+              <Text style={{ color: "#888", marginTop: 6 }}>Sem capa</Text>
+            </View>
+          )}
+
+          <View style={s.row}>
+            <TouchableOpacity style={[s.btn, s.btnOutline]} onPress={abrirCameraCapa} disabled={salvando}>
+              <Text style={[s.btnText, { color: VERDE }]}>📷 Foto</Text>
+            </TouchableOpacity>
+            <View style={{ width: 10 }} />
+            <TouchableOpacity style={[s.btn, s.btnOutline]} onPress={escolherCapaGaleria} disabled={salvando}>
+              <Text style={[s.btnText, { color: VERDE }]}>🖼️ Galeria</Text>
+            </TouchableOpacity>
+          </View>
+
+          {form.imagem ? (
+            <TouchableOpacity style={s.btnRemoverCapa} onPress={removerCapa} disabled={salvando}>
+              <Text style={s.btnRemoverCapaTxt}>Remover capa</Text>
+            </TouchableOpacity>
+          ) : null}
+
+          {salvando && uploadProgress > 0 ? (
+            <Text style={s.uploadTxt}>Preparando capa: {Math.round(uploadProgress * 100)}%</Text>
           ) : null}
 
           {[
@@ -370,7 +528,7 @@ export default function LivrosScreen({ route }: any) {
           <View style={s.row}>
             <TouchableOpacity
               style={[s.btn, s.btnOutline]}
-              onPress={() => { setModalForm(false); setForm({}); }}
+              onPress={() => { setModalForm(false); setForm({}); setImagemLocalUri(null); }}
             >
               <Text style={[s.btnText, { color: VERDE }]}>Cancelar</Text>
             </TouchableOpacity>
@@ -423,5 +581,9 @@ const s = StyleSheet.create({
   modalTitle: { fontSize: 20, fontWeight: "bold", color: "#1a1a18", marginBottom: 16 },
   buscandoRow: { flexDirection: "row", alignItems: "center", backgroundColor: "#E1F5EE", padding: 12, borderRadius: 10, marginBottom: 16 },
   capaPreview: { width: "100%", height: 160, borderRadius: 10, marginBottom: 16, backgroundColor: "#eee" },
+  capaPreviewVazia: { alignItems: "center", justifyContent: "center" },
+  btnRemoverCapa: { alignSelf: "center", paddingVertical: 8, paddingHorizontal: 12, marginBottom: 12 },
+  btnRemoverCapaTxt: { color: "#A32D2D", fontWeight: "600", fontSize: 13 },
+  uploadTxt: { color: VERDE, fontSize: 13, textAlign: "center", marginBottom: 12, fontWeight: "600" },
   label: { fontSize: 12, color: "#666", marginBottom: 4, fontWeight: "500" },
 });
