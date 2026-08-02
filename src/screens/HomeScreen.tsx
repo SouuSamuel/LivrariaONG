@@ -167,6 +167,11 @@ export default function HomeScreen({ navigation }: any) {
         </TouchableOpacity>
       </View>
 
+      <View style={s.otaAviso}>
+        <Text style={s.otaTexto}>Atualização automática ativa — teste 02/08/2026</Text>
+        <Text style={s.otaSub}>Busca de livros em múltiplas fontes</Text>
+      </View>
+
       {/* ALERTA DE ATRASO */}
       {atrasados.length > 0 && (
         <TouchableOpacity
@@ -317,6 +322,17 @@ const s = StyleSheet.create({
     borderRadius: 100,
   },
   headerBadgeTxt: { color: "#fff", fontSize: 12, fontWeight: "600" },
+  otaAviso: {
+    backgroundColor: "#ECF8F4",
+    borderLeftWidth: 3,
+    borderLeftColor: VERDE,
+    marginHorizontal: 12,
+    marginTop: 12,
+    padding: 10,
+    borderRadius: 8,
+  },
+  otaTexto: { color: "#0F6E56", fontSize: 12, fontWeight: "700" },
+  otaSub: { color: "#477267", fontSize: 11, marginTop: 2 },
   alerta: {
     backgroundColor: "#FCEBEB",
     margin: 12,

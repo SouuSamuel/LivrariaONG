@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -16,6 +16,7 @@ import { CameraView, Camera } from "expo-camera";
 import * as ImagePicker from "expo-image-picker";
 import { buscarLivrosPagina, buscarLivrosPorTexto, adicionarLivro, excluirLivro } from "../../services/livros";
 import { prepararImagemLivro, removerImagemLivro } from "../../services/imagens";
+import { buscarLivroPorISBN, deveIgnorarScanDuplicado, normalizarCodigoISBN, normalizarISBN } from "../../services/isbn";
 import { Livro } from "../../types";
 import type { DocumentData, QueryDocumentSnapshot } from "firebase/firestore";
 
@@ -37,6 +38,7 @@ export default function LivrosScreen({ route }: any) {
   const [carregandoMais, setCarregandoMais] = useState(false);
   const [imagemLocalUri, setImagemLocalUri] = useState<string | null>(null);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const ultimoScanRef = useRef<{ codigo: string; timestamp: number } | null>(null);
 
   useEffect(() => {
     const timer = setTimeout(() => carregar(busca), 350);
@@ -150,118 +152,72 @@ export default function LivrosScreen({ route }: any) {
     setForm((f) => ({ ...f, imagem: "", imagemStoragePath: undefined }));
   };
 
+  const aplicarDadosISBN = (dados: Partial<Livro>) => {
+    setForm((f) => ({
+      ...f,
+      ...dados,
+      imagem: f.imagem || dados.imagem || "",
+      status: "Disponível",
+    }));
+  };
+
   // Busca por ISBN direto (usado quando vem da tela de empréstimos)
-  const buscarPorISBN = async (isbn: string) => {
+  const buscarPorISBN = async (entrada: string) => {
+    const isbn = normalizarISBN(entrada);
+    const codigo = normalizarCodigoISBN(entrada);
+
+    if (!isbn) {
+      setForm((f) => ({ ...f, isbn: codigo, codigoBarras: codigo, status: "Disponível" }));
+      Alert.alert("ISBN inválido", "Confira o código ou preencha os dados manualmente.");
+      return;
+    }
+
+    setForm((f) => ({
+      ...f,
+      isbn: isbn.isbn13 || isbn.isbn10 || isbn.codigo,
+      codigoBarras: isbn.isbn13 || isbn.codigo,
+      isbn10: isbn.isbn10,
+      isbn13: isbn.isbn13,
+      status: "Disponível",
+    }));
+
     setBuscandoAPI(true);
-    const isbn10 =
-      isbn.length === 13 && isbn.startsWith("978")
-        ? isbn.slice(3, 12)
-        : isbn;
-    await buscarNasAPIs(isbn, isbn10);
-    setBuscandoAPI(false);
+    try {
+      const resultado = await buscarLivroPorISBN(isbn.codigo);
+      if (resultado?.encontrado && resultado.dados) {
+        aplicarDadosISBN(resultado.dados);
+      } else {
+        Alert.alert(
+          "Livro não encontrado",
+          `ISBN: ${isbn.codigo}\n\nNão encontramos esse livro nas fontes públicas. Você pode preencher manualmente.`
+        );
+      }
+    } catch (e) {
+      console.log("Busca de ISBN falhou:", e);
+      Alert.alert("Busca indisponível", "Não foi possível consultar as fontes agora. Preencha manualmente.");
+    } finally {
+      setBuscandoAPI(false);
+    }
   };
 
   const onScan = async ({ data }: { data: string }) => {
     if (!scanAtivo) return;
+
+    const codigo = normalizarCodigoISBN(data);
+    const agora = Date.now();
+    const ultimo = ultimoScanRef.current;
+    if (deveIgnorarScanDuplicado(ultimo, codigo, agora)) return;
+    ultimoScanRef.current = { codigo, timestamp: agora };
+
     setScanAtivo(false);
     setModalScan(false);
     setModalForm(true);
-    setBuscandoAPI(true);
-
-    const codigoLimpo = data.replace(/\D/g, "");
-    setForm({ codigoBarras: data, isbn: codigoLimpo, status: "Disponível" });
+    setImagemLocalUri(null);
 
     console.log("Código lido:", data);
-    console.log("Código limpo:", codigoLimpo);
+    console.log("Código normalizado:", codigo);
 
-    const isbn13 = codigoLimpo;
-    const isbn10 =
-      codigoLimpo.length === 13 && codigoLimpo.startsWith("978")
-        ? codigoLimpo.slice(3, 12)
-        : codigoLimpo;
-
-    const encontrado = await buscarNasAPIs(isbn13, isbn10);
-    setBuscandoAPI(false);
-
-    if (!encontrado) {
-      Alert.alert(
-        "Livro não encontrado nas APIs",
-        `ISBN: ${codigoLimpo}\n\nPreencha os dados manualmente.`
-      );
-    }
-  };
-
-  const buscarNasAPIs = async (isbn13: string, isbn10: string): Promise<boolean> => {
-    // 1. Open Library
-    try {
-      console.log("Tentando Open Library:", isbn13);
-      const res = await fetch(
-        `https://openlibrary.org/api/books?bibkeys=ISBN:${isbn13}&format=json&jscmd=data`
-      );
-      const json = await res.json();
-      const chave = `ISBN:${isbn13}`;
-      if (json[chave]) {
-        const info = json[chave];
-        setForm((f) => ({
-          ...f,
-          titulo: info.title || "",
-          autor: info.authors?.map((a: any) => a.name).join(", ") || "",
-          editora: info.publishers?.[0]?.name || "",
-          imagem: info.cover?.medium || info.cover?.large || "",
-          isbn: isbn13,
-          status: "Disponível",
-        }));
-        return true;
-      }
-    } catch (e) {
-      console.log("Open Library falhou:", e);
-    }
-
-    // 2. Google Books com ISBN-13
-    try {
-      console.log("Tentando Google Books ISBN-13:", isbn13);
-      const res = await fetch(
-        `https://www.googleapis.com/books/v1/volumes?q=isbn:${isbn13}&maxResults=1`
-      );
-      const json = await res.json();
-      if (json.items?.length > 0) {
-        preencherForm(json.items[0].volumeInfo, isbn13);
-        return true;
-      }
-    } catch (e) {
-      console.log("Google Books ISBN-13 falhou:", e);
-    }
-
-    // 3. Google Books com ISBN-10
-    if (isbn10 !== isbn13) {
-      try {
-        console.log("Tentando Google Books ISBN-10:", isbn10);
-        const res = await fetch(
-          `https://www.googleapis.com/books/v1/volumes?q=isbn:${isbn10}&maxResults=1`
-        );
-        const json = await res.json();
-        if (json.items?.length > 0) {
-          preencherForm(json.items[0].volumeInfo, isbn13);
-          return true;
-        }
-      } catch (e) {
-        console.log("Google Books ISBN-10 falhou:", e);
-      }
-    }
-
-    return false;
-  };
-
-  const preencherForm = (info: any, isbn: string) => {
-    setForm((f) => ({
-      ...f,
-      titulo: info.title || "",
-      autor: info.authors?.join(", ") || "",
-      editora: info.publisher || "",
-      imagem: info.imageLinks?.thumbnail?.replace("http://", "https://") || "",
-      isbn,
-      status: "Disponível",
-    }));
+    await buscarPorISBN(data);
   };
 
   const salvar = async () => {
@@ -468,7 +424,7 @@ export default function LivrosScreen({ route }: any) {
             <View style={s.buscandoRow}>
               <ActivityIndicator color={VERDE} />
               <Text style={{ marginLeft: 8, color: VERDE, fontSize: 13 }}>
-                Buscando informações do livro...
+                Procurando livro em várias fontes...
               </Text>
             </View>
           )}
@@ -508,9 +464,14 @@ export default function LivrosScreen({ route }: any) {
 
           {[
             { label: "Título *", key: "titulo", placeholder: "Ex: Dom Casmurro" },
+            { label: "Subtítulo", key: "subtitulo", placeholder: "Opcional" },
             { label: "Autor *", key: "autor", placeholder: "Ex: Machado de Assis" },
             { label: "Editora", key: "editora", placeholder: "Ex: Companhia das Letras" },
             { label: "Categoria", key: "categoria", placeholder: "Ex: Literatura" },
+            { label: "Ano", key: "ano", placeholder: "Ex: 2024", keyboardType: "numeric", numeric: true },
+            { label: "Páginas", key: "paginas", placeholder: "Ex: 180", keyboardType: "numeric", numeric: true },
+            { label: "Idioma", key: "idioma", placeholder: "Ex: pt" },
+            { label: "Descrição", key: "descricao", placeholder: "Resumo ou observações", multiline: true },
             { label: "ISBN", key: "isbn", placeholder: "978-..." },
           ].map((campo) => (
             <View key={campo.key} style={{ marginBottom: 12 }}>
@@ -519,8 +480,15 @@ export default function LivrosScreen({ route }: any) {
                 style={s.input}
                 placeholder={campo.placeholder}
                 placeholderTextColor="#aaa"
-                value={(form as any)[campo.key] || ""}
-                onChangeText={(v) => setForm((f) => ({ ...f, [campo.key]: v }))}
+                keyboardType={(campo as any).keyboardType || "default"}
+                multiline={(campo as any).multiline}
+                value={(form as any)[campo.key]?.toString() || ""}
+                onChangeText={(v) =>
+                  setForm((f) => ({
+                    ...f,
+                    [campo.key]: (campo as any).numeric ? (v ? Number(v) : undefined) : v,
+                  }))
+                }
               />
             </View>
           ))}

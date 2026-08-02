@@ -5,8 +5,16 @@ export interface Livro {
   editora: string;
   ano: number;
   isbn: string;
+  isbn10?: string;
+  isbn13?: string;
   codigoBarras: string;
+  subtitulo?: string;
   categoria: string;
+  dataPublicacao?: string;
+  paginas?: number;
+  descricao?: string;
+  idioma?: string;
+  fonteDados?: string;
   status: 'Disponível' | 'Emprestado';
   imagem: string;
   imagemStoragePath?: string;
