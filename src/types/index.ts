@@ -32,6 +32,9 @@ export interface Pessoa {
   telefone: string;
   idade: number;
   observacoes: string;
+  ativo?: boolean;
+  arquivado?: boolean;
+  dataArquivamento?: string;
   dataCadastro: string;
 }
 
