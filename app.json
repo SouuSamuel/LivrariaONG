@@ -2,9 +2,9 @@
   "expo": {
     "name": "Cantinho do Livro",
     "slug": "Cantinho-do-Livro",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.jpg",
+    "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "splash": {
@@ -22,7 +22,8 @@
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "package": "com.sousamuel.CantinhodoLivro"
+      "package": "com.sousamuel.CantinhodoLivro",
+      "versionCode": 2
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -46,7 +47,9 @@
       "policy": "appVersion"
     },
     "updates": {
-      "url": "https://u.expo.dev/8cec5bda-f7be-4458-902e-a307e421e072"
+      "url": "https://u.expo.dev/8cec5bda-f7be-4458-902e-a307e421e072",
+      "checkAutomatically": "ON_LOAD",
+      "fallbackToCacheTimeout": 0
     }
   }
 }

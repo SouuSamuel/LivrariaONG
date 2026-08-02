@@ -2,7 +2,7 @@ import { initializeApp } from 'firebase/app';
 import { getAuth, initializeAuth } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
 import { Platform } from 'react-native';
-import { createAsyncStorage } from '@react-native-async-storage/async-storage';
+import ReactNativeAsyncStorage from '@react-native-async-storage/async-storage';
 
 const firebaseConfig = {
   apiKey: process.env.EXPO_PUBLIC_FIREBASE_API_KEY,
@@ -16,7 +16,7 @@ const firebaseConfig = {
 
 export const app = initializeApp(firebaseConfig);
 
-const getReactNativePersistence = (storage: ReturnType<typeof createAsyncStorage>) => {
+const getReactNativePersistence = (storage: typeof ReactNativeAsyncStorage) => {
   return class ReactNativePersistence {
     static type = 'LOCAL';
     type = 'LOCAL';
@@ -54,9 +54,8 @@ const criarAuth = () => {
   if (Platform.OS === 'web') return getAuth(app);
 
   try {
-    const appStorage = createAsyncStorage('app');
     return initializeAuth(app, {
-      persistence: getReactNativePersistence(appStorage) as any,
+      persistence: getReactNativePersistence(ReactNativeAsyncStorage) as any,
     });
   } catch {
     return getAuth(app);
