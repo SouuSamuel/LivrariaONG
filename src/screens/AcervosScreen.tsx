@@ -15,6 +15,7 @@ import {
   buscarLivrosPagina,
   buscarLivrosPorTexto,
   livroTemExemplarDisponivel,
+  obterCategoriaLivro,
 } from "../services/livros";
 import { buscarEmprestimos } from "../services/emprestimos";
 import { Livro, Emprestimo } from "../types";
@@ -191,6 +192,7 @@ export default function AcervoScreen({ navigation }: any) {
           }
           renderItem={({ item }) => {
             const disponivel = isDisponivel(item);
+            const categoria = obterCategoriaLivro(item.categoria);
             return (
               <TouchableOpacity
                 style={s.card}
@@ -206,9 +208,12 @@ export default function AcervoScreen({ navigation }: any) {
                 <View style={{ flex: 1 }}>
                   <Text style={s.cardTitulo} numberOfLines={2}>{item.titulo}</Text>
                   <Text style={s.cardAutor}>{item.autor}</Text>
-                  {item.categoria ? (
-                    <Text style={s.cardCategoria}>{item.categoria}</Text>
-                  ) : null}
+                  <View style={[s.categoriaBadge, { borderColor: categoria.cor }]}>
+                    <View style={[s.categoriaPonto, { backgroundColor: categoria.cor }]} />
+                    <Text style={[s.cardCategoria, { color: categoria.cor }]}>
+                      {categoria.label}
+                    </Text>
+                  </View>
                   <View style={[
                     s.badge,
                     { backgroundColor: disponivel ? "#E1F5EE" : "#FAEEDA" }
@@ -280,7 +285,7 @@ export default function AcervoScreen({ navigation }: any) {
                 { label: "Título", valor: livroDetalhe.titulo },
                 { label: "Autor", valor: livroDetalhe.autor },
                 { label: "Editora", valor: livroDetalhe.editora },
-                { label: "Categoria", valor: livroDetalhe.categoria },
+                { label: "Categoria", valor: obterCategoriaLivro(livroDetalhe.categoria).label },
                 { label: "ISBN", valor: livroDetalhe.isbn },
               ].filter(i => i.valor).map((item) => (
                 <View key={item.label} style={s.infoRow}>
@@ -343,7 +348,19 @@ const s = StyleSheet.create({
   },
   cardTitulo: { fontSize: 14, fontWeight: "bold", color: "#1a1a18" },
   cardAutor: { fontSize: 12, color: "#666", marginTop: 2 },
-  cardCategoria: { fontSize: 11, color: "#aaa", marginTop: 2 },
+  cardCategoria: { fontSize: 11, fontWeight: "700" },
+  categoriaBadge: {
+    alignSelf: "flex-start",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    borderWidth: 1,
+    borderRadius: 100,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    marginTop: 6,
+  },
+  categoriaPonto: { width: 9, height: 9, borderRadius: 5 },
   badge: {
     alignSelf: "flex-start", paddingHorizontal: 8,
     paddingVertical: 3, borderRadius: 100, marginTop: 6,

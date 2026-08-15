@@ -19,7 +19,7 @@ import {
   buscarEmprestimos,
   registrarDevolucao,
 } from "../../services/emprestimos";
-import { buscarLivros, calcularQuantidadeDisponivel, livroTemExemplarDisponivel } from "../../services/livros";
+import { buscarLivros, calcularQuantidadeDisponivel, livroTemExemplarDisponivel, normalizarTextoBusca } from "../../services/livros";
 import { buscarPessoas } from "../../services/pessoas";
 import { Emprestimo, Livro, Pessoa } from "../../types";
 
@@ -211,11 +211,17 @@ export default function EmprestimosScreen() {
     )
     .sort((a, b) => new Date(b.dataEmprestimo).getTime() - new Date(a.dataEmprestimo).getTime());
 
-  const livrosParaSelecao = livros.filter((l) =>
-    `${l.titulo} ${l.autor} ${l.isbn} ${l.codigoBarras}`
-      .toLowerCase()
-      .includes(buscaLivro.toLowerCase())
-  );
+  const termoBuscaLivro = normalizarTextoBusca(buscaLivro);
+  const livrosParaSelecao = livros
+    .filter((l) =>
+      normalizarTextoBusca(`${l.titulo} ${l.autor} ${l.isbn} ${l.codigoBarras}`)
+        .includes(termoBuscaLivro)
+    )
+    .sort((a, b) => {
+      const disponivelA = livroTemExemplarDisponivel(a, emprestimosAtivos);
+      const disponivelB = livroTemExemplarDisponivel(b, emprestimosAtivos);
+      return Number(disponivelB) - Number(disponivelA);
+    });
 
   const pessoasFiltradas = pessoas.filter((p) =>
     p.nome.toLowerCase().includes(buscaPessoa.toLowerCase())
@@ -396,7 +402,7 @@ export default function EmprestimosScreen() {
 
           {/* Etapa 1 — Escolher livro */}
           {etapa === "livro" && (
-            <ScrollView contentContainerStyle={{ paddingBottom: 40 }}>
+            <View style={{ flex: 1 }}>
               <Text style={s.modalTitle}>📖 Escolha o livro</Text>
               <TextInput
                 placeholder="Buscar livro..."
@@ -405,12 +411,17 @@ export default function EmprestimosScreen() {
                 style={s.input}
                 placeholderTextColor="#aaa"
               />
-              {livrosParaSelecao.length === 0 ? (
-                <Text style={{ color: "#aaa", textAlign: "center", marginTop: 20 }}>
-                  Nenhum livro encontrado
-                </Text>
-              ) : (
-                livrosParaSelecao.map((l) => {
+              <FlatList
+                data={livrosParaSelecao}
+                keyExtractor={(l) => l.id!}
+                keyboardShouldPersistTaps="handled"
+                contentContainerStyle={{ paddingBottom: 24 }}
+                ListEmptyComponent={
+                  <Text style={{ color: "#aaa", textAlign: "center", marginTop: 20 }}>
+                    Nenhum livro encontrado
+                  </Text>
+                }
+                renderItem={({ item: l }) => {
                   const quantidadeLivre = calcularQuantidadeDisponivel(l, emprestimosAtivos);
                   const disponivel = quantidadeLivre > 0;
                   return (
@@ -441,8 +452,8 @@ export default function EmprestimosScreen() {
                       </View>
                     </TouchableOpacity>
                   );
-                })
-              )}
+                }}
+              />
               <View style={[s.row, { marginTop: 16 }]}>
                 <TouchableOpacity style={[s.btn, s.btnOutline]} onPress={() => setModalForm(false)}>
                   <Text style={[s.btnText, { color: VERDE }]}>Cancelar</Text>
@@ -456,7 +467,7 @@ export default function EmprestimosScreen() {
                   <Text style={s.btnText}>Próximo →</Text>
                 </TouchableOpacity>
               </View>
-            </ScrollView>
+            </View>
           )}
 
           {/* Etapa 2 — Escolher pessoa */}

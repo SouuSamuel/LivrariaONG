@@ -12,17 +12,39 @@ import {
   ScrollView,
   Image,
 } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { CameraView, Camera } from "expo-camera";
 import * as ImagePicker from "expo-image-picker";
-import { buscarLivrosPagina, buscarLivrosPorTexto, adicionarLivro, excluirLivro } from "../../services/livros";
-import { prepararImagemLivro, removerImagemLivro } from "../../services/imagens";
+import {
+  CATEGORIAS_LIVRO,
+  adicionarLivro,
+  buscarLivrosPagina,
+  buscarLivrosPorTexto,
+  excluirLivro,
+  normalizarCategoriaLivro,
+  obterCategoriaLivro,
+  prepararLivroParaFirestore,
+} from "../../services/livros";
+import { enviarImagemLivro, prepararImagemLivro, removerImagemLivro } from "../../services/imagens";
 import { buscarLivroPorISBN, deveIgnorarScanDuplicado, normalizarCodigoISBN, normalizarISBN } from "../../services/isbn";
 import { Livro } from "../../types";
 import type { DocumentData, QueryDocumentSnapshot } from "firebase/firestore";
 
 const VERDE = "#1D9E75";
 
+const categoriaInicial = "adulto";
+
+const erroEhPermissaoFirestore = (erro: any) =>
+  erro?.code === "permission-denied" || erro?.code === "firestore/permission-denied";
+
+const erroEhConexao = (erro: any) =>
+  erro?.code === "unavailable" ||
+  erro?.code === "deadline-exceeded" ||
+  erro?.name === "AbortError" ||
+  String(erro?.message || "").toLowerCase().includes("network");
+
 export default function LivrosScreen({ route }: any) {
+  const insets = useSafeAreaInsets();
   const [livros, setLivros] = useState<Livro[]>([]);
   const [loading, setLoading] = useState(true);
   const [busca, setBusca] = useState("");
@@ -49,7 +71,7 @@ export default function LivrosScreen({ route }: any) {
   useEffect(() => {
     if (route?.params?.isbnParaCadastrar) {
       const isbn = route.params.isbnParaCadastrar;
-      setForm({ isbn, codigoBarras: isbn, status: "Disponível" });
+      setForm({ isbn, codigoBarras: isbn, categoria: categoriaInicial, status: "Disponível" });
       setImagemLocalUri(null);
       setModalForm(true);
       buscarPorISBN(isbn);
@@ -72,7 +94,7 @@ export default function LivrosScreen({ route }: any) {
         setTemMais(pagina.temMais);
       }
     } catch (e) {
-      console.log("Erro ao carregar livros:", e);
+      console.error("Erro ao carregar livros:", e);
       setErro("Não foi possível carregar os livros. Tente novamente.");
     } finally {
       setLoading(false);
@@ -88,7 +110,7 @@ export default function LivrosScreen({ route }: any) {
       setUltimoDoc(pagina.ultimoDoc);
       setTemMais(pagina.temMais);
     } catch (e) {
-      console.log("Erro ao carregar mais livros:", e);
+      console.error("Erro ao carregar mais livros:", e);
       setErro("Não foi possível carregar mais livros.");
     } finally {
       setCarregandoMais(false);
@@ -102,7 +124,7 @@ export default function LivrosScreen({ route }: any) {
 
   const abrirScanner = async () => {
     const ok = await pedirPermissao();
-    if (!ok) return Alert.alert("Erro", "Sem permissão da câmera");
+    if (!ok) return Alert.alert("Permissão negada", "Autorize a câmera para escanear o ISBN.");
     setScanAtivo(true);
     setModalScan(true);
   };
@@ -110,7 +132,7 @@ export default function LivrosScreen({ route }: any) {
   const abrirCameraCapa = async () => {
     const permissao = await ImagePicker.requestCameraPermissionsAsync();
     if (!permissao.granted) {
-      return Alert.alert("Permissão necessária", "Autorize a câmera para fotografar a capa.");
+      return Alert.alert("Permissão negada", "Autorize a câmera para fotografar a capa.");
     }
 
     const result = await ImagePicker.launchCameraAsync({
@@ -130,7 +152,7 @@ export default function LivrosScreen({ route }: any) {
   const escolherCapaGaleria = async () => {
     const permissao = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!permissao.granted) {
-      return Alert.alert("Permissão necessária", "Autorize a galeria para escolher a capa.");
+      return Alert.alert("Permissão negada", "Autorize a galeria para escolher a capa.");
     }
 
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -156,6 +178,7 @@ export default function LivrosScreen({ route }: any) {
     setForm((f) => ({
       ...f,
       ...dados,
+      categoria: normalizarCategoriaLivro(dados.categoria) || f.categoria || categoriaInicial,
       imagem: f.imagem || dados.imagem || "",
       status: "Disponível",
     }));
@@ -167,7 +190,13 @@ export default function LivrosScreen({ route }: any) {
     const codigo = normalizarCodigoISBN(entrada);
 
     if (!isbn) {
-      setForm((f) => ({ ...f, isbn: codigo, codigoBarras: codigo, status: "Disponível" }));
+      setForm((f) => ({
+        ...f,
+        isbn: codigo,
+        codigoBarras: codigo,
+        categoria: f.categoria || categoriaInicial,
+        status: "Disponível",
+      }));
       Alert.alert("ISBN inválido", "Confira o código ou preencha os dados manualmente.");
       return;
     }
@@ -178,6 +207,7 @@ export default function LivrosScreen({ route }: any) {
       codigoBarras: isbn.isbn13 || isbn.codigo,
       isbn10: isbn.isbn10,
       isbn13: isbn.isbn13,
+      categoria: f.categoria || categoriaInicial,
       status: "Disponível",
     }));
 
@@ -193,8 +223,11 @@ export default function LivrosScreen({ route }: any) {
         );
       }
     } catch (e) {
-      console.log("Busca de ISBN falhou:", e);
-      Alert.alert("Busca indisponível", "Não foi possível consultar as fontes agora. Preencha manualmente.");
+      console.error("Busca de ISBN falhou:", e);
+      Alert.alert(
+        erroEhConexao(e) ? "Falha de conexão" : "Busca indisponível",
+        "Não foi possível consultar as fontes agora. Preencha manualmente."
+      );
     } finally {
       setBuscandoAPI(false);
     }
@@ -206,7 +239,12 @@ export default function LivrosScreen({ route }: any) {
     const codigo = normalizarCodigoISBN(data);
     const agora = Date.now();
     const ultimo = ultimoScanRef.current;
-    if (deveIgnorarScanDuplicado(ultimo, codigo, agora)) return;
+    if (deveIgnorarScanDuplicado(ultimo, codigo, agora)) {
+      setScanAtivo(false);
+      setModalScan(false);
+      Alert.alert("Código duplicado", "Esse ISBN acabou de ser lido. Aguarde um instante e tente novamente.");
+      return;
+    }
     ultimoScanRef.current = { codigo, timestamp: agora };
 
     setScanAtivo(false);
@@ -222,27 +260,78 @@ export default function LivrosScreen({ route }: any) {
 
   const salvar = async () => {
     if (!form.titulo || !form.autor) {
-      return Alert.alert("Erro", "Preencha título e autor");
+      return Alert.alert("Campos obrigatórios", "Preencha título e autor antes de salvar.");
     }
     setSalvando(true);
     setUploadProgress(0);
 
-    let imagemPreparada: { dataUrl: string } | null = null;
-    let imagemEnviada: { storagePath?: string } | undefined;
+    let imagemEnviada: { url: string; storagePath: string } | undefined;
     try {
+      let imagemFinal = form.imagem || "";
+      let imagemStoragePath = form.imagemStoragePath;
+      const origemCapa = imagemLocalUri ? "foto_local" : form.imagem ? "capa_remota_ou_existente" : "sem_foto";
+      console.log("Cadastro de livro: origem da capa", {
+        origemCapa,
+        usaStorage: Boolean(imagemLocalUri),
+      });
+
       if (imagemLocalUri) {
-        imagemPreparada = await prepararImagemLivro(imagemLocalUri, setUploadProgress);
+        try {
+          const imagemPreparada = await prepararImagemLivro(imagemLocalUri, (progresso) =>
+            setUploadProgress(progresso * 0.7)
+          );
+          imagemEnviada = await enviarImagemLivro(imagemPreparada.dataUrl);
+          imagemFinal = imagemEnviada.url;
+          imagemStoragePath = imagemEnviada.storagePath;
+          setUploadProgress(1);
+        } catch (e) {
+          console.error("Falha no Storage ao enviar capa do livro:", e);
+          Alert.alert(
+            "Falha no Storage",
+            "Não foi possível enviar a foto da capa. O livro não foi salvo para evitar cadastro incompleto."
+          );
+          return;
+        }
       }
 
-      await adicionarLivro({
+      const livroParaSalvar = prepararLivroParaFirestore({
         ...(form as Livro),
-        imagem: imagemPreparada?.dataUrl || form.imagem || "",
-        imagemStoragePath: undefined,
+        imagem: imagemFinal,
+        imagemStoragePath,
         quantidadeTotal: form.quantidadeTotal || 1,
         quantidadeDisponivel: form.quantidadeDisponivel || form.quantidadeTotal || 1,
         status: "Disponível",
         dataCadastro: new Date().toISOString(),
       });
+
+      console.log("Cadastro de livro: documento pronto para Firestore", {
+        colecao: "livros",
+        campos: Object.keys(livroParaSalvar),
+        categoria: livroParaSalvar.categoria,
+        temImagem: Boolean(livroParaSalvar.imagem),
+        temImagemStoragePath: Boolean(livroParaSalvar.imagemStoragePath),
+      });
+
+      try {
+        await adicionarLivro(livroParaSalvar);
+      } catch (e) {
+        console.error("Falha no Firestore ao salvar livro:", e);
+        if (imagemEnviada?.storagePath) {
+          try {
+            await removerImagemLivro(imagemEnviada.storagePath);
+          } catch (erroRemocao) {
+            console.error("Erro ao remover imagem após falha no Firestore:", erroRemocao);
+          }
+        }
+
+        Alert.alert(
+          erroEhPermissaoFirestore(e) ? "Falha no Firestore" : erroEhConexao(e) ? "Falha de conexão" : "Falha no Firestore",
+          erroEhPermissaoFirestore(e)
+            ? "O Firestore recusou a gravação. Verifique permissões/regras para a coleção livros."
+            : "Não foi possível salvar o livro no Firestore. Tente novamente."
+        );
+        return;
+      }
 
       setModalForm(false);
       setForm({});
@@ -250,15 +339,15 @@ export default function LivrosScreen({ route }: any) {
       carregar(busca);
       Alert.alert("✅ Livro cadastrado!", "Agora você pode realizar o empréstimo.");
     } catch (e) {
-      console.log("Erro ao salvar livro:", e);
+      console.error("Erro inesperado ao salvar livro:", e);
       if (imagemEnviada?.storagePath) {
         try {
           await removerImagemLivro(imagemEnviada.storagePath);
         } catch (erroRemocao) {
-          console.log("Erro ao remover imagem após falha:", erroRemocao);
+          console.error("Erro ao remover imagem após falha inesperada:", erroRemocao);
         }
       }
-      Alert.alert("Erro", "Não foi possível cadastrar o livro. Nenhum registro incompleto foi salvo.");
+      Alert.alert("Erro inesperado", "Não foi possível cadastrar o livro. Nenhum registro incompleto foi salvo.");
     } finally {
       setSalvando(false);
       setUploadProgress(0);
@@ -295,7 +384,7 @@ export default function LivrosScreen({ route }: any) {
         <TouchableOpacity
           style={[s.btn, s.btnOutline]}
           onPress={() => {
-            setForm({ status: "Disponível" });
+            setForm({ categoria: categoriaInicial, status: "Disponível" });
             setImagemLocalUri(null);
             setModalForm(true);
           }}
@@ -335,49 +424,67 @@ export default function LivrosScreen({ route }: any) {
               <ActivityIndicator color={VERDE} style={{ marginVertical: 16 }} />
             ) : null
           }
-          renderItem={({ item }) => (
-            <TouchableOpacity
-              style={s.card}
-              onLongPress={() =>
-                Alert.alert("Excluir", `Excluir "${item.titulo}"?`, [
-                  { text: "Cancelar", style: "cancel" },
-                  {
-                    text: "Excluir",
-                    style: "destructive",
-                    onPress: async () => {
-                      await excluirLivro(item.id!);
-                      carregar(busca);
+          renderItem={({ item }) => {
+            const categoria = obterCategoriaLivro(item.categoria);
+            return (
+              <TouchableOpacity
+                style={s.card}
+                onLongPress={() =>
+                  Alert.alert("Excluir", `Excluir "${item.titulo}"?`, [
+                    { text: "Cancelar", style: "cancel" },
+                    {
+                      text: "Excluir",
+                      style: "destructive",
+                      onPress: async () => {
+                        await excluirLivro(item.id!);
+                        if (item.imagemStoragePath) {
+                          try {
+                            await removerImagemLivro(item.imagemStoragePath);
+                          } catch (e) {
+                            console.error("Erro ao remover capa do Storage:", e);
+                          }
+                        }
+                        carregar(busca);
+                      },
                     },
-                  },
-                ])
-              }
-            >
-              {item.imagem ? (
-                <Image source={{ uri: item.imagem }} style={s.img} />
-              ) : (
-                <View style={[s.img, s.imgVazia]}>
-                  <Text style={{ fontSize: 24 }}>📖</Text>
+                  ])
+                }
+              >
+                {item.imagem ? (
+                  <Image source={{ uri: item.imagem }} style={s.img} />
+                ) : (
+                  <View style={[s.img, s.imgVazia]}>
+                    <Text style={{ fontSize: 24 }}>📖</Text>
+                  </View>
+                )}
+                <View style={{ flex: 1 }}>
+                  <Text style={s.cardTitle} numberOfLines={2}>{item.titulo}</Text>
+                  <Text style={s.cardSub}>{item.autor}</Text>
+                  {item.editora ? (
+                    <Text style={s.cardMeta}>{item.editora}</Text>
+                  ) : null}
+                  <View style={s.badgeRowLivro}>
+                    <View style={[s.categoriaBadge, { borderColor: categoria.cor }]}>
+                      <View style={[s.categoriaPonto, { backgroundColor: categoria.cor }]} />
+                      <Text style={[s.categoriaBadgeTxt, { color: categoria.cor }]}>
+                        {categoria.label}
+                      </Text>
+                    </View>
+                    <View style={[s.badge, {
+                      backgroundColor: item.status === "Disponível" ? "#E1F5EE" : "#FAEEDA",
+                    }]}>
+                      <Text style={{
+                        fontSize: 11, fontWeight: "500",
+                        color: item.status === "Disponível" ? "#0F6E56" : "#BA7517",
+                      }}>
+                        {item.status}
+                      </Text>
+                    </View>
+                  </View>
                 </View>
-              )}
-              <View style={{ flex: 1 }}>
-                <Text style={s.cardTitle} numberOfLines={2}>{item.titulo}</Text>
-                <Text style={s.cardSub}>{item.autor}</Text>
-                {item.editora ? (
-                  <Text style={s.cardMeta}>{item.editora}</Text>
-                ) : null}
-                <View style={[s.badge, {
-                  backgroundColor: item.status === "Disponível" ? "#E1F5EE" : "#FAEEDA",
-                }]}>
-                  <Text style={{
-                    fontSize: 11, fontWeight: "500",
-                    color: item.status === "Disponível" ? "#0F6E56" : "#BA7517",
-                  }}>
-                    {item.status}
-                  </Text>
-                </View>
-              </View>
-            </TouchableOpacity>
-          )}
+              </TouchableOpacity>
+            );
+          }}
         />
       )}
 
@@ -415,7 +522,14 @@ export default function LivrosScreen({ route }: any) {
         animationType="slide"
         onRequestClose={() => setModalForm(false)}
       >
-        <ScrollView style={s.modal} contentContainerStyle={{ paddingBottom: 40 }}>
+        <ScrollView
+          style={s.modal}
+          contentContainerStyle={[
+            s.modalConteudo,
+            { paddingBottom: Math.max(insets.bottom, 16) + 96 },
+          ]}
+          keyboardShouldPersistTaps="handled"
+        >
           <Text style={s.modalTitle}>
             {form.codigoBarras ? "📷 Dados do livro" : "✏️ Cadastro manual"}
           </Text>
@@ -442,7 +556,7 @@ export default function LivrosScreen({ route }: any) {
             </View>
           )}
 
-          <View style={s.row}>
+          <View style={[s.row, s.formActions, { paddingBottom: Math.max(insets.bottom, 16) }]}>
             <TouchableOpacity style={[s.btn, s.btnOutline]} onPress={abrirCameraCapa} disabled={salvando}>
               <Text style={[s.btnText, { color: VERDE }]}>📷 Foto</Text>
             </TouchableOpacity>
@@ -459,7 +573,7 @@ export default function LivrosScreen({ route }: any) {
           ) : null}
 
           {salvando && uploadProgress > 0 ? (
-            <Text style={s.uploadTxt}>Preparando capa: {Math.round(uploadProgress * 100)}%</Text>
+            <Text style={s.uploadTxt}>Preparando e enviando capa: {Math.round(uploadProgress * 100)}%</Text>
           ) : null}
 
           {[
@@ -467,7 +581,6 @@ export default function LivrosScreen({ route }: any) {
             { label: "Subtítulo", key: "subtitulo", placeholder: "Opcional" },
             { label: "Autor *", key: "autor", placeholder: "Ex: Machado de Assis" },
             { label: "Editora", key: "editora", placeholder: "Ex: Companhia das Letras" },
-            { label: "Categoria", key: "categoria", placeholder: "Ex: Literatura" },
             { label: "Ano", key: "ano", placeholder: "Ex: 2024", keyboardType: "numeric", numeric: true },
             { label: "Páginas", key: "paginas", placeholder: "Ex: 180", keyboardType: "numeric", numeric: true },
             { label: "Idioma", key: "idioma", placeholder: "Ex: pt" },
@@ -492,6 +605,37 @@ export default function LivrosScreen({ route }: any) {
               />
             </View>
           ))}
+
+          <View style={{ marginBottom: 12 }}>
+            <Text style={s.label}>Categoria *</Text>
+            <View style={s.categoriasRow}>
+              {CATEGORIAS_LIVRO.map((categoria) => {
+                const ativa = normalizarCategoriaLivro(form.categoria) === categoria.valor;
+                return (
+                  <TouchableOpacity
+                    key={categoria.valor}
+                    style={[
+                      s.categoriaBtn,
+                      { borderColor: categoria.cor },
+                      ativa && { backgroundColor: categoria.cor },
+                    ]}
+                    onPress={() => setForm((f) => ({ ...f, categoria: categoria.valor }))}
+                    disabled={salvando}
+                  >
+                    <View
+                      style={[
+                        s.categoriaPonto,
+                        { backgroundColor: ativa ? "#fff" : categoria.cor },
+                      ]}
+                    />
+                    <Text style={[s.categoriaTxt, ativa && s.categoriaTxtAtiva]}>
+                      {categoria.label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </View>
 
           <View style={s.row}>
             <TouchableOpacity
@@ -540,12 +684,24 @@ const s = StyleSheet.create({
   cardTitle: { fontWeight: "bold", fontSize: 14, color: "#1a1a18" },
   cardSub: { color: "#666", fontSize: 12, marginTop: 2 },
   cardMeta: { color: "#aaa", fontSize: 11, marginTop: 2 },
+  badgeRowLivro: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 6, marginTop: 6 },
   badge: { alignSelf: "flex-start", paddingHorizontal: 8, paddingVertical: 3, borderRadius: 100, marginTop: 6 },
+  categoriaBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    borderWidth: 1,
+    borderRadius: 100,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  categoriaBadgeTxt: { fontSize: 11, fontWeight: "700" },
   scanOverlay: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, alignItems: "center", justifyContent: "center" },
   scanFrame: { width: 250, height: 150, borderWidth: 2, borderColor: VERDE, borderRadius: 12, marginBottom: 20 },
   scanTxt: { color: "#fff", fontSize: 14, textAlign: "center", backgroundColor: "rgba(0,0,0,0.5)", padding: 8, borderRadius: 8 },
   scanFechar: { position: "absolute", top: 50, right: 20, backgroundColor: "rgba(0,0,0,0.6)", padding: 10, borderRadius: 20 },
   modal: { flex: 1, backgroundColor: "#f4f4f2", padding: 20, paddingTop: 50 },
+  modalConteudo: { paddingBottom: 120 },
   modalTitle: { fontSize: 20, fontWeight: "bold", color: "#1a1a18", marginBottom: 16 },
   buscandoRow: { flexDirection: "row", alignItems: "center", backgroundColor: "#E1F5EE", padding: 12, borderRadius: 10, marginBottom: 16 },
   capaPreview: { width: "100%", height: 160, borderRadius: 10, marginBottom: 16, backgroundColor: "#eee" },
@@ -553,5 +709,22 @@ const s = StyleSheet.create({
   btnRemoverCapa: { alignSelf: "center", paddingVertical: 8, paddingHorizontal: 12, marginBottom: 12 },
   btnRemoverCapaTxt: { color: "#A32D2D", fontWeight: "600", fontSize: 13 },
   uploadTxt: { color: VERDE, fontSize: 13, textAlign: "center", marginBottom: 12, fontWeight: "600" },
+  categoriasRow: { flexDirection: "row", gap: 8, paddingHorizontal: 10 },
+  categoriaBtn: {
+    flex: 1,
+    minHeight: 44,
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 8,
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 6,
+    backgroundColor: "#fff",
+  },
+  categoriaPonto: { width: 9, height: 9, borderRadius: 5 },
+  categoriaTxt: { fontSize: 12, fontWeight: "700", color: "#333" },
+  categoriaTxtAtiva: { color: "#fff" },
+  formActions: { marginTop: 8 },
   label: { fontSize: 12, color: "#666", marginBottom: 4, fontWeight: "500" },
 });

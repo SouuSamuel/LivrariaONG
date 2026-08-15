@@ -21,6 +21,18 @@ const col = collection(db, 'livros');
 
 export const LIVROS_PAGE_SIZE = 50;
 
+export type CategoriaLivroCanonica = 'adulto' | 'crianca' | 'juvenil';
+
+export const CATEGORIAS_LIVRO: Array<{
+  valor: CategoriaLivroCanonica;
+  label: string;
+  cor: string;
+}> = [
+  { valor: 'adulto', label: 'Adulto', cor: '#185FA5' },
+  { valor: 'crianca', label: 'Criança', cor: '#1D9E75' },
+  { valor: 'juvenil', label: 'Juvenil', cor: '#A32D2D' },
+];
+
 export interface LivrosPagina {
   livros: Livro[];
   ultimoDoc: QueryDocumentSnapshot<DocumentData> | null;
@@ -28,6 +40,7 @@ export interface LivrosPagina {
 }
 
 const texto = (valor: unknown) => (typeof valor === 'string' ? valor : '');
+const textoLimpo = (valor: unknown) => texto(valor).trim();
 
 const numeroPositivo = (valor: unknown): number | undefined => {
   if (typeof valor === 'number' && Number.isFinite(valor) && valor >= 0) {
@@ -60,6 +73,73 @@ export const montarTextoBuscaLivro = (livro: Partial<Livro>) =>
       .filter(Boolean)
       .join(' ')
   );
+
+export const normalizarCategoriaLivro = (categoria: unknown): CategoriaLivroCanonica | '' => {
+  const valor = normalizarTextoBusca(texto(categoria));
+  if (valor === 'adulto') return 'adulto';
+  if (valor === 'crianca' || valor === 'criança') return 'crianca';
+  if (valor === 'juvenil') return 'juvenil';
+  return '';
+};
+
+export const obterCategoriaLivro = (categoria: unknown) => {
+  const canonica = normalizarCategoriaLivro(categoria);
+  const encontrada = CATEGORIAS_LIVRO.find((item) => item.valor === canonica);
+  if (encontrada) return encontrada;
+
+  const legada = textoLimpo(categoria);
+  return legada
+    ? { valor: legada, label: legada, cor: '#777', legado: true }
+    : { valor: '', label: 'Sem categoria', cor: '#777', legado: true };
+};
+
+const atribuirTexto = (destino: Record<string, unknown>, chave: string, valor: unknown) => {
+  const limpo = textoLimpo(valor);
+  if (limpo) destino[chave] = limpo;
+};
+
+const atribuirNumero = (destino: Record<string, unknown>, chave: string, valor: unknown) => {
+  const numero = numeroPositivo(valor);
+  if (numero !== undefined && Number.isFinite(numero)) destino[chave] = numero;
+};
+
+export const prepararLivroParaFirestore = (livro: Partial<Livro>) => {
+  const quantidadeTotal = Math.max(numeroPositivo(livro.quantidadeTotal) ?? 1, 1);
+  const quantidadeDisponivel = Math.min(
+    Math.max(numeroPositivo(livro.quantidadeDisponivel) ?? quantidadeTotal, 0),
+    quantidadeTotal
+  );
+  const categoria = normalizarCategoriaLivro(livro.categoria) || 'adulto';
+
+  const dados: Record<string, unknown> = {
+    titulo: textoLimpo(livro.titulo),
+    autor: textoLimpo(livro.autor),
+    editora: textoLimpo(livro.editora),
+    ano: numeroPositivo(livro.ano) ?? 0,
+    isbn: textoLimpo(livro.isbn),
+    codigoBarras: textoLimpo(livro.codigoBarras),
+    categoria,
+    status: 'Disponível',
+    imagem: textoLimpo(livro.imagem),
+    quantidadeTotal,
+    quantidadeDisponivel,
+    dataCadastro: textoLimpo(livro.dataCadastro) || new Date().toISOString(),
+  };
+
+  atribuirTexto(dados, 'isbn10', livro.isbn10);
+  atribuirTexto(dados, 'isbn13', livro.isbn13);
+  atribuirTexto(dados, 'subtitulo', livro.subtitulo);
+  atribuirTexto(dados, 'dataPublicacao', livro.dataPublicacao);
+  atribuirNumero(dados, 'paginas', livro.paginas);
+  atribuirTexto(dados, 'descricao', livro.descricao);
+  atribuirTexto(dados, 'idioma', livro.idioma);
+  atribuirTexto(dados, 'fonteDados', livro.fonteDados);
+  atribuirTexto(dados, 'imagemStoragePath', livro.imagemStoragePath);
+
+  dados.busca = montarTextoBuscaLivro(dados as Partial<Livro>);
+
+  return dados as unknown as Livro;
+};
 
 export const normalizarLivroDados = (id: string, data: DocumentData): Livro => {
   const quantidadeTotal =
@@ -155,23 +235,8 @@ export const livroTemExemplarDisponivel = (
   emprestimosAtivos: Emprestimo[] = []
 ) => calcularQuantidadeDisponivel(livro, emprestimosAtivos) > 0;
 
-export const adicionarLivro = (livro: Livro) => {
-  const dados: Livro = {
-    ...livro,
-    editora: livro.editora || '',
-    ano: livro.ano || 0,
-    isbn: livro.isbn || '',
-    codigoBarras: livro.codigoBarras || '',
-    categoria: livro.categoria || '',
-    imagem: livro.imagem || '',
-    quantidadeTotal: livro.quantidadeTotal ?? 1,
-    quantidadeDisponivel: livro.quantidadeDisponivel ?? livro.quantidadeTotal ?? 1,
-    status: 'Disponível',
-    busca: montarTextoBuscaLivro(livro),
-  };
-
-  return addDoc(col, dados);
-};
+export const adicionarLivro = (livro: Partial<Livro>) =>
+  addDoc(col, prepararLivroParaFirestore(livro));
 
 export const buscarLivros = async (): Promise<Livro[]> => {
   const snap = await getDocs(col);

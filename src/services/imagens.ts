@@ -1,8 +1,18 @@
 import { ImageManipulator, SaveFormat } from 'expo-image-manipulator';
+import { deleteObject, getDownloadURL, ref, uploadString } from 'firebase/storage';
+import { storage } from './firebase';
 
 export interface ImagemLivroResultado {
   dataUrl: string;
 }
+
+export interface ImagemLivroUpload {
+  url: string;
+  storagePath: string;
+}
+
+const criarCaminhoCapaLivro = () =>
+  `livros/capas/${Date.now()}-${Math.random().toString(36).slice(2)}.jpg`;
 
 export const prepararImagemLivro = async (
   uri: string,
@@ -33,4 +43,27 @@ export const prepararImagemLivro = async (
   };
 };
 
-export const removerImagemLivro = async (_storagePath?: string) => {};
+export const enviarImagemLivro = async (
+  dataUrl: string,
+  storagePath = criarCaminhoCapaLivro()
+): Promise<ImagemLivroUpload> => {
+  const imagemRef = ref(storage, storagePath);
+  await uploadString(imagemRef, dataUrl, 'data_url', {
+    contentType: 'image/jpeg',
+  });
+
+  return {
+    url: await getDownloadURL(imagemRef),
+    storagePath,
+  };
+};
+
+export const removerImagemLivro = async (storagePath?: string) => {
+  if (!storagePath) return;
+
+  try {
+    await deleteObject(ref(storage, storagePath));
+  } catch (e: any) {
+    if (e?.code !== 'storage/object-not-found') throw e;
+  }
+};
