@@ -17,7 +17,7 @@ export default function WelcomeScreen({ navigation }: any) {
       {/* HERO */}
       <View style={s.hero}>
         <Text style={s.heroIcone}>📚</Text>
-        <Text style={s.heroTitulo}>BiblioONG</Text>
+        <Text style={s.heroTitulo}>Casa do Caminho</Text>
         <Text style={s.heroSub}>Biblioteca comunitária</Text>
       </View>
 
@@ -50,7 +50,7 @@ export default function WelcomeScreen({ navigation }: any) {
         </TouchableOpacity>
       </View>
 
-      <Text style={s.rodape}>BiblioONG · Sistema de gestão de biblioteca</Text>
+      <Text style={s.rodape}>Casa do Caminho · Sistema de gestão de biblioteca</Text>
     </View>
   );
 }

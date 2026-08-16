@@ -48,7 +48,7 @@ export default function LoginScreen() {
   return (
     <View style={s.container}>
       <View style={s.header}>
-        <Text style={s.titulo}>📚 BiblioONG</Text>
+        <Text style={s.titulo}>📚 Casa do Caminho</Text>
         <Text style={s.sub}>Sistema de empréstimos</Text>
       </View>
       <View style={s.form}>

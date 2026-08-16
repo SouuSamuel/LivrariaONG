@@ -633,7 +633,7 @@ export default function LivrosScreen({ route }: any) {
     <View style={s.container}>
       {/* HEADER */}
       <View style={s.header}>
-        <Text style={s.titulo}>📚 Biblioteca ONG</Text>
+        <Text style={s.titulo}>📚 Casa do Caminho</Text>
         <Text style={s.subtitulo}>
           {busca.trim() ? `${livros.length} resultado(s)` : `${livros.length} livro(s) carregado(s)`}
         </Text>

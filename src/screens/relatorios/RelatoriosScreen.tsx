@@ -24,7 +24,7 @@ export default function RelatoriosScreen() {
   const [loading, setLoading] = useState(true);
   const [gerando, setGerando] = useState(false);
   const [filtro, setFiltro] = useState<Filtro>("todos");
-  const [nomeONG, setNomeONG] = useState("BiblioONG");
+  const [nomeONG, setNomeONG] = useState("Casa do Caminho");
 
   useEffect(() => { carregar(); }, []);
 

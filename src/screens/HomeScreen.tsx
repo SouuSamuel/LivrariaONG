@@ -101,7 +101,7 @@ export default function HomeScreen({ navigation }: any) {
   {/* HEADER */ }
   <View style={s.header}>
     <View>
-      <Text style={s.headerTitulo}>📚 BiblioONG</Text>
+      <Text style={s.headerTitulo}>📚 Casa do Caminho</Text>
       <Text style={s.headerSub}>Sistema de empréstimos</Text>
     </View>
     <TouchableOpacity
@@ -166,7 +166,7 @@ export default function HomeScreen({ navigation }: any) {
       {/* HEADER */}
       <View style={s.header}>
         <View>
-          <Text style={s.headerTitulo}>📚 BiblioONG</Text>
+          <Text style={s.headerTitulo}>📚 Casa do Caminho</Text>
           <Text style={s.headerSub}>Sistema de empréstimos</Text>
         </View>
         <TouchableOpacity
