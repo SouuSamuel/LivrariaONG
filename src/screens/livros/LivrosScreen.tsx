@@ -11,10 +11,12 @@ import {
   Modal,
   ScrollView,
   Image,
+  Linking,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { CameraView, Camera } from "expo-camera";
 import * as ImagePicker from "expo-image-picker";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   CATEGORIAS_LIVRO,
   adicionarLivro,
@@ -31,6 +33,8 @@ import { Livro } from "../../types";
 import type { DocumentData, QueryDocumentSnapshot } from "firebase/firestore";
 
 const VERDE = "#1D9E75";
+const RASCUNHO_LIVRO_KEY = "@cantinhoLivro:rascunhoLivro";
+const RASCUNHO_LIVRO_TTL_MS = 30 * 60 * 1000;
 
 const erroEhPermissaoFirestore = (erro: any) =>
   erro?.code === "permission-denied" || erro?.code === "firestore/permission-denied";
@@ -58,7 +62,50 @@ export default function LivrosScreen({ route }: any) {
   const [carregandoMais, setCarregandoMais] = useState(false);
   const [imagemLocalUri, setImagemLocalUri] = useState<string | null>(null);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [abrindoSeletorCapa, setAbrindoSeletorCapa] = useState(false);
   const ultimoScanRef = useRef<{ codigo: string; timestamp: number } | null>(null);
+  const montadoRef = useRef(true);
+  const formRef = useRef<Partial<Livro>>({});
+  const modalFormRef = useRef(false);
+
+  useEffect(() => {
+    formRef.current = form;
+  }, [form]);
+
+  useEffect(() => {
+    modalFormRef.current = modalForm;
+  }, [modalForm]);
+
+  useEffect(() => {
+    let ativo = true;
+
+    const restaurarEstadoInterrompido = async () => {
+      try {
+        await restaurarRascunhoCadastroLivro();
+        const pendente = await ImagePicker.getPendingResultAsync();
+        if (!ativo || !montadoRef.current || !pendente) return;
+
+        if ("code" in pendente) {
+          console.error("ImagePicker retornou erro pendente:", {
+            code: pendente.code,
+            message: pendente.message,
+          });
+          return;
+        }
+
+        aplicarResultadoCapa(pendente, "resultado-pendente");
+      } catch (e) {
+        console.error("Erro ao restaurar rascunho ou resultado pendente da capa:", e);
+      }
+    };
+
+    restaurarEstadoInterrompido();
+
+    return () => {
+      ativo = false;
+      montadoRef.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     const timer = setTimeout(() => carregar(busca), 350);
@@ -69,6 +116,7 @@ export default function LivrosScreen({ route }: any) {
   useEffect(() => {
     if (route?.params?.isbnParaCadastrar) {
       const isbn = route.params.isbnParaCadastrar;
+      void limparRascunhoCadastroLivro();
       setForm({ isbn, codigoBarras: isbn, status: "Disponível" });
       setImagemLocalUri(null);
       setModalForm(true);
@@ -115,6 +163,115 @@ export default function LivrosScreen({ route }: any) {
     }
   };
 
+  const limparRascunhoCadastroLivro = async () => {
+    try {
+      await AsyncStorage.removeItem(RASCUNHO_LIVRO_KEY);
+    } catch (e) {
+      console.error("Erro ao limpar rascunho do cadastro de livro:", e);
+    }
+  };
+
+  const salvarRascunhoCadastroLivro = async () => {
+    const atual = formRef.current;
+    const categoria = normalizarCategoriaLivro(atual.categoria);
+    const rascunho = {
+      titulo: atual.titulo?.trim() || "",
+      autor: atual.autor?.trim() || "",
+      isbn: atual.isbn?.trim() || "",
+      categoria,
+      modalAberto: modalFormRef.current,
+      timestamp: Date.now(),
+    };
+
+    try {
+      await AsyncStorage.setItem(RASCUNHO_LIVRO_KEY, JSON.stringify(rascunho));
+    } catch (e) {
+      console.error("Erro ao salvar rascunho do cadastro de livro:", e);
+    }
+  };
+
+  const restaurarRascunhoCadastroLivro = async () => {
+    const bruto = await AsyncStorage.getItem(RASCUNHO_LIVRO_KEY);
+    if (!bruto) return;
+
+    let rascunho: any;
+    try {
+      rascunho = JSON.parse(bruto);
+    } catch {
+      await limparRascunhoCadastroLivro();
+      return;
+    }
+
+    const timestamp = Number(rascunho?.timestamp);
+    const expirado = !Number.isFinite(timestamp) || Date.now() - timestamp > RASCUNHO_LIVRO_TTL_MS;
+    if (expirado) {
+      await limparRascunhoCadastroLivro();
+      return;
+    }
+
+    if (!rascunho?.modalAberto || !montadoRef.current) return;
+
+    const isbn = typeof rascunho.isbn === "string" ? rascunho.isbn : "";
+    setForm((f) => ({
+      ...f,
+      titulo: typeof rascunho.titulo === "string" ? rascunho.titulo : "",
+      autor: typeof rascunho.autor === "string" ? rascunho.autor : "",
+      isbn,
+      codigoBarras: isbn || f.codigoBarras,
+      categoria: normalizarCategoriaLivro(rascunho.categoria) || f.categoria,
+      status: "Disponível",
+    }));
+    setModalForm(true);
+  };
+
+  const aplicarResultadoCapa = (result: ImagePicker.ImagePickerResult | null, etapa: string) => {
+    if (!result || result.canceled) {
+      if (montadoRef.current) setModalForm(true);
+      return false;
+    }
+
+    const asset = result.assets?.[0];
+    if (!asset?.uri) {
+      console.error("ImagePicker retornou resultado sem asset de imagem:", {
+        etapa,
+        canceled: result.canceled,
+        assets: result.assets?.length ?? 0,
+      });
+      if (montadoRef.current) setModalForm(true);
+      return false;
+    }
+
+    if (!montadoRef.current) return false;
+
+    setImagemLocalUri(asset.uri);
+    setForm((f) => ({ ...f, imagem: asset.uri, imagemStoragePath: undefined }));
+    setModalForm(true);
+    return true;
+  };
+
+  const abrirConfiguracoesApp = async () => {
+    try {
+      await Linking.openSettings();
+    } catch (e) {
+      console.error("Erro ao abrir configurações do aplicativo:", e);
+    }
+  };
+
+  const mostrarPermissaoNegadaCapa = (origem: "camera" | "galeria", podePedirNovamente?: boolean) => {
+    const mensagem =
+      origem === "camera"
+        ? "Autorize a câmera para fotografar a capa do livro."
+        : "Autorize a galeria para escolher a capa do livro.";
+    const tentarNovamente = origem === "camera" ? abrirCameraCapa : escolherCapaGaleria;
+    const botoes = [
+      { text: "Cancelar", style: "cancel" as const },
+      ...(podePedirNovamente ? [{ text: "Tentar novamente", onPress: tentarNovamente }] : []),
+      { text: "Abrir configurações", onPress: abrirConfiguracoesApp },
+    ];
+
+    Alert.alert("Permissão negada", mensagem, botoes);
+  };
+
   const pedirPermissao = async () => {
     const { status } = await Camera.requestCameraPermissionsAsync();
     return status === "granted";
@@ -128,48 +285,82 @@ export default function LivrosScreen({ route }: any) {
   };
 
   const abrirCameraCapa = async () => {
-    const permissao = await ImagePicker.requestCameraPermissionsAsync();
-    if (!permissao.granted) {
-      return Alert.alert("Permissão negada", "Autorize a câmera para fotografar a capa.");
-    }
+    if (abrindoSeletorCapa || salvando) return;
 
-    const result = await ImagePicker.launchCameraAsync({
-      mediaTypes: ["images"],
-      allowsEditing: true,
-      aspect: [3, 4],
-      quality: 0.9,
-    });
+    setAbrindoSeletorCapa(true);
+    try {
+      const permissao = await ImagePicker.requestCameraPermissionsAsync();
+      if (!montadoRef.current) return;
 
-    if (!result.canceled && result.assets[0]?.uri) {
-      const uri = result.assets[0].uri;
-      setImagemLocalUri(uri);
-      setForm((f) => ({ ...f, imagem: uri, imagemStoragePath: undefined }));
+      if (!permissao.granted) {
+        mostrarPermissaoNegadaCapa("camera", permissao.canAskAgain);
+        return;
+      }
+
+      await salvarRascunhoCadastroLivro();
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ["images"],
+        allowsEditing: true,
+        aspect: [3, 4],
+        quality: 0.9,
+      });
+
+      aplicarResultadoCapa(result, "camera");
+    } catch (e) {
+      console.error("Erro ao abrir câmera para capa:", e);
+      if (montadoRef.current) {
+        Alert.alert("Erro na câmera", "Não foi possível abrir a câmera para fotografar a capa.");
+        setModalForm(true);
+      }
+    } finally {
+      if (montadoRef.current) setAbrindoSeletorCapa(false);
     }
   };
 
   const escolherCapaGaleria = async () => {
-    const permissao = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!permissao.granted) {
-      return Alert.alert("Permissão negada", "Autorize a galeria para escolher a capa.");
-    }
+    if (abrindoSeletorCapa || salvando) return;
 
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ["images"],
-      allowsEditing: true,
-      aspect: [3, 4],
-      quality: 0.9,
-    });
+    setAbrindoSeletorCapa(true);
+    try {
+      const permissao = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!montadoRef.current) return;
 
-    if (!result.canceled && result.assets[0]?.uri) {
-      const uri = result.assets[0].uri;
-      setImagemLocalUri(uri);
-      setForm((f) => ({ ...f, imagem: uri, imagemStoragePath: undefined }));
+      if (!permissao.granted) {
+        mostrarPermissaoNegadaCapa("galeria", permissao.canAskAgain);
+        return;
+      }
+
+      await salvarRascunhoCadastroLivro();
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ["images"],
+        allowsEditing: true,
+        aspect: [3, 4],
+        quality: 0.9,
+      });
+
+      aplicarResultadoCapa(result, "galeria");
+    } catch (e) {
+      console.error("Erro ao abrir galeria para capa:", e);
+      if (montadoRef.current) {
+        Alert.alert("Erro na galeria", "Não foi possível abrir a galeria para escolher a capa.");
+        setModalForm(true);
+      }
+    } finally {
+      if (montadoRef.current) setAbrindoSeletorCapa(false);
     }
   };
 
   const removerCapa = () => {
     setImagemLocalUri(null);
     setForm((f) => ({ ...f, imagem: "", imagemStoragePath: undefined }));
+  };
+
+  const cancelarCadastroLivro = async () => {
+    await limparRascunhoCadastroLivro();
+    if (!montadoRef.current) return;
+    setModalForm(false);
+    setForm({});
+    setImagemLocalUri(null);
   };
 
   const aplicarDadosISBN = (dados: Partial<Livro>) => {
@@ -252,6 +443,7 @@ export default function LivrosScreen({ route }: any) {
     setModalScan(false);
     setModalForm(true);
     setImagemLocalUri(null);
+    void limparRascunhoCadastroLivro();
 
     console.log("Código lido:", data);
     console.log("Código normalizado:", codigo);
@@ -303,19 +495,29 @@ export default function LivrosScreen({ route }: any) {
       if (imagemLocalUri) {
         try {
           const imagemPreparada = await prepararImagemLivro(imagemLocalUri, (progresso) =>
-            setUploadProgress(progresso * 0.7)
+            montadoRef.current && setUploadProgress(progresso * 0.55)
           );
-          imagemEnviada = await enviarImagemLivro(imagemPreparada.dataUrl);
+          imagemEnviada = await enviarImagemLivro(
+            imagemPreparada,
+            undefined,
+            (progresso) => montadoRef.current && setUploadProgress(0.55 + progresso * 0.4)
+          );
           imagemFinal = imagemEnviada.url;
           imagemStoragePath = imagemEnviada.storagePath;
-          setUploadProgress(1);
+          if (montadoRef.current) setUploadProgress(1);
         } catch (e) {
-          const erroImagem = descreverErroImagem(e);
+          const erroImagem = descreverErroImagem(e, {
+            etapa: "salvar-livro",
+            uri: imagemLocalUri,
+            mime: "image/jpeg",
+          });
           console.error("Falha no Storage ao enviar capa do livro:", erroImagem);
-          Alert.alert(
-            "Falha no Storage",
-            `${erroImagem.mensagemUsuario}\n\nCódigo técnico: ${erroImagem.code}\nDetalhe: ${erroImagem.message}`
-          );
+          if (montadoRef.current) {
+            Alert.alert(
+              "Falha no Storage",
+              `${erroImagem.mensagemUsuario}\n\nCódigo técnico: ${erroImagem.code}`
+            );
+          }
           return;
         }
       }
@@ -364,11 +566,14 @@ export default function LivrosScreen({ route }: any) {
         return;
       }
 
-      setModalForm(false);
-      setForm({});
-      setImagemLocalUri(null);
-      carregar(busca);
-      Alert.alert("✅ Livro cadastrado!", "Agora você pode realizar o empréstimo.");
+      await limparRascunhoCadastroLivro();
+      if (montadoRef.current) {
+        setModalForm(false);
+        setForm({});
+        setImagemLocalUri(null);
+        carregar(busca);
+        Alert.alert("✅ Livro cadastrado!", "Agora você pode realizar o empréstimo.");
+      }
     } catch (e) {
       console.error("Erro inesperado ao salvar livro:", e);
       if (imagemEnviada?.storagePath) {
@@ -378,10 +583,14 @@ export default function LivrosScreen({ route }: any) {
           console.error("Erro ao remover imagem após falha inesperada:", erroRemocao);
         }
       }
-      Alert.alert("Erro inesperado", "Não foi possível cadastrar o livro. Nenhum registro incompleto foi salvo.");
+      if (montadoRef.current) {
+        Alert.alert("Erro inesperado", "Não foi possível cadastrar o livro. Nenhum registro incompleto foi salvo.");
+      }
     } finally {
-      setSalvando(false);
-      setUploadProgress(0);
+      if (montadoRef.current) {
+        setSalvando(false);
+        setUploadProgress(0);
+      }
     }
   };
 
@@ -415,6 +624,7 @@ export default function LivrosScreen({ route }: any) {
         <TouchableOpacity
           style={[s.btn, s.btnOutline]}
           onPress={() => {
+            void limparRascunhoCadastroLivro();
             setForm({ status: "Disponível" });
             setImagemLocalUri(null);
             setModalForm(true);
@@ -551,7 +761,7 @@ export default function LivrosScreen({ route }: any) {
       <Modal
         visible={modalForm}
         animationType="slide"
-        onRequestClose={() => setModalForm(false)}
+        onRequestClose={cancelarCadastroLivro}
       >
         <ScrollView
           style={s.modal}
@@ -588,11 +798,19 @@ export default function LivrosScreen({ route }: any) {
           )}
 
           <View style={s.row}>
-            <TouchableOpacity style={[s.btn, s.btnOutline]} onPress={abrirCameraCapa} disabled={salvando}>
+            <TouchableOpacity
+              style={[s.btn, s.btnOutline]}
+              onPress={abrirCameraCapa}
+              disabled={salvando || abrindoSeletorCapa}
+            >
               <Text style={[s.btnText, { color: VERDE }]}>📷 Foto</Text>
             </TouchableOpacity>
             <View style={{ width: 10 }} />
-            <TouchableOpacity style={[s.btn, s.btnOutline]} onPress={escolherCapaGaleria} disabled={salvando}>
+            <TouchableOpacity
+              style={[s.btn, s.btnOutline]}
+              onPress={escolherCapaGaleria}
+              disabled={salvando || abrindoSeletorCapa}
+            >
               <Text style={[s.btnText, { color: VERDE }]}>🖼️ Galeria</Text>
             </TouchableOpacity>
           </View>
@@ -665,7 +883,7 @@ export default function LivrosScreen({ route }: any) {
           <View style={[s.row, s.formActions, { paddingBottom: Math.max(insets.bottom, 16) }]}>
             <TouchableOpacity
               style={[s.btn, s.btnOutline]}
-              onPress={() => { setModalForm(false); setForm({}); setImagemLocalUri(null); }}
+              onPress={cancelarCadastroLivro}
             >
               <Text style={[s.btnText, { color: VERDE }]}>Cancelar</Text>
             </TouchableOpacity>

@@ -125,8 +125,11 @@ export const prepararLivroParaFirestore = (livro: Partial<Livro>) => {
 
   atribuirTexto(dados, 'isbn', livro.isbn);
   atribuirTexto(dados, 'codigoBarras', livro.codigoBarras || livro.isbn);
-  atribuirTexto(dados, 'imagem', livro.imagem);
-  atribuirTexto(dados, 'imagemStoragePath', livro.imagemStoragePath);
+  const imagemPublica = textoLimpo(livro.imagem);
+  if (imagemPublica.startsWith('https://')) {
+    dados.imagem = imagemPublica;
+    atribuirTexto(dados, 'imagemStoragePath', livro.imagemStoragePath);
+  }
 
   dados.busca = montarTextoBuscaLivro(dados as Partial<Livro>);
 
