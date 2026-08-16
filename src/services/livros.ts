@@ -21,16 +21,16 @@ const col = collection(db, 'livros');
 
 export const LIVROS_PAGE_SIZE = 50;
 
-export type CategoriaLivroCanonica = 'adulto' | 'crianca' | 'juvenil';
+export type CategoriaLivroCanonica = 'jovem' | 'crianca' | 'adolescente';
 
 export const CATEGORIAS_LIVRO: Array<{
   valor: CategoriaLivroCanonica;
   label: string;
   cor: string;
 }> = [
-  { valor: 'adulto', label: 'Adulto', cor: '#185FA5' },
+  { valor: 'jovem', label: 'Jovem', cor: '#185FA5' },
   { valor: 'crianca', label: 'Criança', cor: '#1D9E75' },
-  { valor: 'juvenil', label: 'Juvenil', cor: '#A32D2D' },
+  { valor: 'adolescente', label: 'Adolescente', cor: '#A32D2D' },
 ];
 
 export interface LivrosPagina {
@@ -76,9 +76,9 @@ export const montarTextoBuscaLivro = (livro: Partial<Livro>) =>
 
 export const normalizarCategoriaLivro = (categoria: unknown): CategoriaLivroCanonica | '' => {
   const valor = normalizarTextoBusca(texto(categoria));
-  if (valor === 'adulto') return 'adulto';
+  if (valor === 'jovem') return 'jovem';
   if (valor === 'crianca' || valor === 'criança') return 'crianca';
-  if (valor === 'juvenil') return 'juvenil';
+  if (valor === 'adolescente') return 'adolescente';
   return '';
 };
 
@@ -98,42 +98,34 @@ const atribuirTexto = (destino: Record<string, unknown>, chave: string, valor: u
   if (limpo) destino[chave] = limpo;
 };
 
-const atribuirNumero = (destino: Record<string, unknown>, chave: string, valor: unknown) => {
-  const numero = numeroPositivo(valor);
-  if (numero !== undefined && Number.isFinite(numero)) destino[chave] = numero;
-};
-
 export const prepararLivroParaFirestore = (livro: Partial<Livro>) => {
   const quantidadeTotal = Math.max(numeroPositivo(livro.quantidadeTotal) ?? 1, 1);
   const quantidadeDisponivel = Math.min(
     Math.max(numeroPositivo(livro.quantidadeDisponivel) ?? quantidadeTotal, 0),
     quantidadeTotal
   );
-  const categoria = normalizarCategoriaLivro(livro.categoria) || 'adulto';
+  const categoria = normalizarCategoriaLivro(livro.categoria);
+
+  if (!categoria) {
+    const erro = new Error('Categoria do livro inválida.');
+    (erro as any).code = 'livros/categoria-invalida';
+    throw erro;
+  }
 
   const dados: Record<string, unknown> = {
     titulo: textoLimpo(livro.titulo),
     autor: textoLimpo(livro.autor),
-    editora: textoLimpo(livro.editora),
-    ano: numeroPositivo(livro.ano) ?? 0,
-    isbn: textoLimpo(livro.isbn),
-    codigoBarras: textoLimpo(livro.codigoBarras),
     categoria,
     status: 'Disponível',
-    imagem: textoLimpo(livro.imagem),
+    disponivel: true,
     quantidadeTotal,
     quantidadeDisponivel,
     dataCadastro: textoLimpo(livro.dataCadastro) || new Date().toISOString(),
   };
 
-  atribuirTexto(dados, 'isbn10', livro.isbn10);
-  atribuirTexto(dados, 'isbn13', livro.isbn13);
-  atribuirTexto(dados, 'subtitulo', livro.subtitulo);
-  atribuirTexto(dados, 'dataPublicacao', livro.dataPublicacao);
-  atribuirNumero(dados, 'paginas', livro.paginas);
-  atribuirTexto(dados, 'descricao', livro.descricao);
-  atribuirTexto(dados, 'idioma', livro.idioma);
-  atribuirTexto(dados, 'fonteDados', livro.fonteDados);
+  atribuirTexto(dados, 'isbn', livro.isbn);
+  atribuirTexto(dados, 'codigoBarras', livro.codigoBarras || livro.isbn);
+  atribuirTexto(dados, 'imagem', livro.imagem);
   atribuirTexto(dados, 'imagemStoragePath', livro.imagemStoragePath);
 
   dados.busca = montarTextoBuscaLivro(dados as Partial<Livro>);

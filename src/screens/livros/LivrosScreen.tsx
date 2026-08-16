@@ -25,14 +25,12 @@ import {
   obterCategoriaLivro,
   prepararLivroParaFirestore,
 } from "../../services/livros";
-import { enviarImagemLivro, prepararImagemLivro, removerImagemLivro } from "../../services/imagens";
+import { descreverErroImagem, enviarImagemLivro, prepararImagemLivro, removerImagemLivro } from "../../services/imagens";
 import { buscarLivroPorISBN, deveIgnorarScanDuplicado, normalizarCodigoISBN, normalizarISBN } from "../../services/isbn";
 import { Livro } from "../../types";
 import type { DocumentData, QueryDocumentSnapshot } from "firebase/firestore";
 
 const VERDE = "#1D9E75";
-
-const categoriaInicial = "adulto";
 
 const erroEhPermissaoFirestore = (erro: any) =>
   erro?.code === "permission-denied" || erro?.code === "firestore/permission-denied";
@@ -71,7 +69,7 @@ export default function LivrosScreen({ route }: any) {
   useEffect(() => {
     if (route?.params?.isbnParaCadastrar) {
       const isbn = route.params.isbnParaCadastrar;
-      setForm({ isbn, codigoBarras: isbn, categoria: categoriaInicial, status: "Disponível" });
+      setForm({ isbn, codigoBarras: isbn, status: "Disponível" });
       setImagemLocalUri(null);
       setModalForm(true);
       buscarPorISBN(isbn);
@@ -175,11 +173,16 @@ export default function LivrosScreen({ route }: any) {
   };
 
   const aplicarDadosISBN = (dados: Partial<Livro>) => {
+    const imagemApi = dados.imagem?.startsWith("https://") ? dados.imagem : "";
     setForm((f) => ({
       ...f,
-      ...dados,
-      categoria: normalizarCategoriaLivro(dados.categoria) || f.categoria || categoriaInicial,
-      imagem: f.imagem || dados.imagem || "",
+      titulo: dados.titulo || f.titulo,
+      autor: dados.autor || f.autor,
+      isbn: dados.isbn || f.isbn,
+      codigoBarras: dados.codigoBarras || dados.isbn || f.codigoBarras,
+      categoria: normalizarCategoriaLivro(dados.categoria) || f.categoria,
+      imagem: f.imagem || imagemApi,
+      imagemStoragePath: f.imagemStoragePath,
       status: "Disponível",
     }));
   };
@@ -194,7 +197,6 @@ export default function LivrosScreen({ route }: any) {
         ...f,
         isbn: codigo,
         codigoBarras: codigo,
-        categoria: f.categoria || categoriaInicial,
         status: "Disponível",
       }));
       Alert.alert("ISBN inválido", "Confira o código ou preencha os dados manualmente.");
@@ -207,7 +209,6 @@ export default function LivrosScreen({ route }: any) {
       codigoBarras: isbn.isbn13 || isbn.codigo,
       isbn10: isbn.isbn10,
       isbn13: isbn.isbn13,
-      categoria: f.categoria || categoriaInicial,
       status: "Disponível",
     }));
 
@@ -259,9 +260,24 @@ export default function LivrosScreen({ route }: any) {
   };
 
   const salvar = async () => {
-    if (!form.titulo || !form.autor) {
+    if (salvando) return;
+
+    const titulo = form.titulo?.trim();
+    const autor = form.autor?.trim();
+    const categoria = normalizarCategoriaLivro(form.categoria);
+    const isbnDigitado = form.isbn?.trim() || "";
+    const isbnNormalizado = isbnDigitado ? normalizarISBN(isbnDigitado) : null;
+
+    if (!titulo || !autor) {
       return Alert.alert("Campos obrigatórios", "Preencha título e autor antes de salvar.");
     }
+    if (!categoria) {
+      return Alert.alert("Categoria obrigatória", "Escolha Jovem, Criança ou Adolescente.");
+    }
+    if (isbnDigitado && !isbnNormalizado) {
+      return Alert.alert("ISBN inválido", "Revise o ISBN informado ou deixe o campo vazio.");
+    }
+
     setSalvando(true);
     setUploadProgress(0);
 
@@ -275,6 +291,15 @@ export default function LivrosScreen({ route }: any) {
         usaStorage: Boolean(imagemLocalUri),
       });
 
+      if (!imagemLocalUri && imagemFinal && !imagemFinal.startsWith("https://")) {
+        console.error("Imagem ignorada antes do Firestore: URL de capa não HTTPS ou URI local.", {
+          origemCapa,
+          prefixo: imagemFinal.slice(0, 16),
+        });
+        imagemFinal = "";
+        imagemStoragePath = undefined;
+      }
+
       if (imagemLocalUri) {
         try {
           const imagemPreparada = await prepararImagemLivro(imagemLocalUri, (progresso) =>
@@ -285,21 +310,27 @@ export default function LivrosScreen({ route }: any) {
           imagemStoragePath = imagemEnviada.storagePath;
           setUploadProgress(1);
         } catch (e) {
-          console.error("Falha no Storage ao enviar capa do livro:", e);
+          const erroImagem = descreverErroImagem(e);
+          console.error("Falha no Storage ao enviar capa do livro:", erroImagem);
           Alert.alert(
             "Falha no Storage",
-            "Não foi possível enviar a foto da capa. O livro não foi salvo para evitar cadastro incompleto."
+            `${erroImagem.mensagemUsuario}\n\nCódigo técnico: ${erroImagem.code}\nDetalhe: ${erroImagem.message}`
           );
           return;
         }
       }
 
+      const isbnFinal = isbnNormalizado?.isbn13 || isbnNormalizado?.isbn10 || "";
       const livroParaSalvar = prepararLivroParaFirestore({
-        ...(form as Livro),
+        titulo,
+        autor,
+        categoria,
+        isbn: isbnFinal,
+        codigoBarras: isbnFinal,
         imagem: imagemFinal,
         imagemStoragePath,
-        quantidadeTotal: form.quantidadeTotal || 1,
-        quantidadeDisponivel: form.quantidadeDisponivel || form.quantidadeTotal || 1,
+        quantidadeTotal: 1,
+        quantidadeDisponivel: 1,
         status: "Disponível",
         dataCadastro: new Date().toISOString(),
       });
@@ -384,7 +415,7 @@ export default function LivrosScreen({ route }: any) {
         <TouchableOpacity
           style={[s.btn, s.btnOutline]}
           onPress={() => {
-            setForm({ categoria: categoriaInicial, status: "Disponível" });
+            setForm({ status: "Disponível" });
             setImagemLocalUri(null);
             setModalForm(true);
           }}
@@ -556,7 +587,7 @@ export default function LivrosScreen({ route }: any) {
             </View>
           )}
 
-          <View style={[s.row, s.formActions, { paddingBottom: Math.max(insets.bottom, 16) }]}>
+          <View style={s.row}>
             <TouchableOpacity style={[s.btn, s.btnOutline]} onPress={abrirCameraCapa} disabled={salvando}>
               <Text style={[s.btnText, { color: VERDE }]}>📷 Foto</Text>
             </TouchableOpacity>
@@ -578,14 +609,8 @@ export default function LivrosScreen({ route }: any) {
 
           {[
             { label: "Título *", key: "titulo", placeholder: "Ex: Dom Casmurro" },
-            { label: "Subtítulo", key: "subtitulo", placeholder: "Opcional" },
             { label: "Autor *", key: "autor", placeholder: "Ex: Machado de Assis" },
-            { label: "Editora", key: "editora", placeholder: "Ex: Companhia das Letras" },
-            { label: "Ano", key: "ano", placeholder: "Ex: 2024", keyboardType: "numeric", numeric: true },
-            { label: "Páginas", key: "paginas", placeholder: "Ex: 180", keyboardType: "numeric", numeric: true },
-            { label: "Idioma", key: "idioma", placeholder: "Ex: pt" },
-            { label: "Descrição", key: "descricao", placeholder: "Resumo ou observações", multiline: true },
-            { label: "ISBN", key: "isbn", placeholder: "978-..." },
+            { label: "ISBN", key: "isbn", placeholder: "Opcional" },
           ].map((campo) => (
             <View key={campo.key} style={{ marginBottom: 12 }}>
               <Text style={s.label}>{campo.label}</Text>
@@ -637,7 +662,7 @@ export default function LivrosScreen({ route }: any) {
             </View>
           </View>
 
-          <View style={s.row}>
+          <View style={[s.row, s.formActions, { paddingBottom: Math.max(insets.bottom, 16) }]}>
             <TouchableOpacity
               style={[s.btn, s.btnOutline]}
               onPress={() => { setModalForm(false); setForm({}); setImagemLocalUri(null); }}
