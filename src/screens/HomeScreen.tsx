@@ -9,6 +9,7 @@ import {
   RefreshControl,
 } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
+import * as Updates from "expo-updates";
 import { buscarLivros } from "../services/livros";
 import { buscarPessoas } from "../services/pessoas";
 import { buscarEmprestimos } from "../services/emprestimos";
@@ -16,6 +17,7 @@ import { Emprestimo } from "../types";
 import { Alert } from "react-native";
 import { signOut } from "firebase/auth";
 import { auth } from "../services/firebase";
+import { obterResumoAtualizacaoApp } from "../services/appAtualizacao";
 
 const VERDE = "#1D9E75";
 const AMBER = "#BA7517";
@@ -33,6 +35,23 @@ export default function HomeScreen({ navigation }: any) {
   const [ativos, setAtivos] = useState<Emprestimo[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const updatesState = Updates.useUpdates();
+  const atualizacaoExecutada = updatesState.currentlyRunning;
+  const resumoAtualizacao = obterResumoAtualizacaoApp({
+    createdAt: atualizacaoExecutada.createdAt ?? Updates.createdAt,
+    isEnabled: Updates.isEnabled,
+    isEmbeddedLaunch: atualizacaoExecutada.isEmbeddedLaunch,
+  });
+
+  useEffect(() => {
+    const motivoEmergencia = atualizacaoExecutada.emergencyLaunchReason || Updates.emergencyLaunchReason;
+
+    if (atualizacaoExecutada.isEmergencyLaunch || Updates.isEmergencyLaunch) {
+      console.error("Expo Updates emergency launch:", {
+        reason: motivoEmergencia || "sem motivo informado",
+      });
+    }
+  }, [atualizacaoExecutada.emergencyLaunchReason, atualizacaoExecutada.isEmergencyLaunch]);
 
   const carregar = async () => {
     try {
@@ -168,8 +187,10 @@ export default function HomeScreen({ navigation }: any) {
       </View>
 
       <View style={s.otaAviso}>
-        <Text style={s.otaTexto}>Atualização automática ativa — teste 02/08/2026</Text>
-        <Text style={s.otaSub}>Busca de livros em múltiplas fontes</Text>
+        <Text style={s.otaTexto}>{resumoAtualizacao.texto}</Text>
+        {resumoAtualizacao.detalhe ? (
+          <Text style={s.otaSub}>{resumoAtualizacao.detalhe}</Text>
+        ) : null}
       </View>
 
       {/* ALERTA DE ATRASO */}
