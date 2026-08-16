@@ -7,24 +7,25 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   TextInput,
-  Modal,
-  ScrollView,
   Image,
 } from "react-native";
 import {
+  atualizarLocalizacaoEstanteLivro,
   buscarLivrosPagina,
   buscarLivrosPorTexto,
   livroTemExemplarDisponivel,
   obterCategoriaLivro,
+  obterTextoLocalizacaoEstante,
 } from "../services/livros";
 import { buscarEmprestimos } from "../services/emprestimos";
 import { Livro, Emprestimo } from "../types";
 import type { DocumentData, QueryDocumentSnapshot } from "firebase/firestore";
+import LivroDetalheModal from "../components/LivroDetalheModal";
 
 const VERDE = "#1D9E75";
 const AMBER = "#BA7517";
 
-export default function AcervoScreen({ navigation }: any) {
+export default function AcervoScreen({ navigation, route }: any) {
   const [livros, setLivros] = useState<Livro[]>([]);
   const [emprestimos, setEmprestimos] = useState<Emprestimo[]>([]);
   const [loading, setLoading] = useState(true);
@@ -35,6 +36,7 @@ export default function AcervoScreen({ navigation }: any) {
   const [ultimoDoc, setUltimoDoc] = useState<QueryDocumentSnapshot<DocumentData> | null>(null);
   const [temMais, setTemMais] = useState(false);
   const [carregandoMais, setCarregandoMais] = useState(false);
+  const modoAdmin = route?.params?.modoAdmin === true;
 
   useEffect(() => {
     const timer = setTimeout(() => carregar(busca, filtro), 350);
@@ -90,17 +92,18 @@ export default function AcervoScreen({ navigation }: any) {
     return livroTemExemplarDisponivel(livro, emprestimos);
   };
 
+  const salvarLocalizacaoDetalhe = async (livro: Livro, localizacaoEstante: string) => {
+    const atualizado = await atualizarLocalizacaoEstanteLivro(livro, localizacaoEstante);
+    setLivros((atuais) => atuais.map((item) => item.id === atualizado.id ? atualizado : item));
+    setLivroDetalhe(atualizado);
+  };
+
   const livrosFiltrados = livros
     .filter((l) => {
       if (filtro === "disponivel") return isDisponivel(l);
       if (filtro === "emprestado") return !isDisponivel(l);
       return true;
-    })
-    .filter((l) =>
-      `${l.titulo} ${l.autor} ${l.categoria}`
-        .toLowerCase()
-        .includes(busca.toLowerCase())
-    );
+    });
 
   const stats = {
     total: livros.length,
@@ -137,7 +140,7 @@ export default function AcervoScreen({ navigation }: any) {
 
       {/* BUSCA */}
       <TextInput
-        placeholder="Buscar por título, autor ou categoria..."
+        placeholder="Buscar por título, autor, ISBN ou estante..."
         value={busca}
         onChangeText={setBusca}
         style={s.input}
@@ -208,6 +211,7 @@ export default function AcervoScreen({ navigation }: any) {
                 <View style={{ flex: 1 }}>
                   <Text style={s.cardTitulo} numberOfLines={2}>{item.titulo}</Text>
                   <Text style={s.cardAutor}>{item.autor}</Text>
+                  <Text style={s.cardEstante} numberOfLines={1}>Estante: {obterTextoLocalizacaoEstante(item)}</Text>
                   <View style={[s.categoriaBadge, { borderColor: categoria.cor }]}>
                     <View style={[s.categoriaPonto, { backgroundColor: categoria.cor }]} />
                     <Text style={[s.cardCategoria, { color: categoria.cor }]}>
@@ -233,74 +237,19 @@ export default function AcervoScreen({ navigation }: any) {
         />
       )}
 
-      {/* MODAL DETALHE */}
-      <Modal
+      <LivroDetalheModal
         visible={!!livroDetalhe}
-        animationType="slide"
-        onRequestClose={() => setLivroDetalhe(null)}
-      >
-        {livroDetalhe && (
-          <ScrollView style={s.modal} contentContainerStyle={{ paddingBottom: 40 }}>
-            <TouchableOpacity
-              style={s.modalFechar}
-              onPress={() => setLivroDetalhe(null)}
-            >
-              <Text style={s.modalFecharTxt}>← Voltar</Text>
-            </TouchableOpacity>
-
-            {livroDetalhe.imagem ? (
-              <Image
-                source={{ uri: livroDetalhe.imagem }}
-                style={s.capaDetalhe}
-                resizeMode="contain"
-              />
-            ) : (
-              <View style={[s.capaDetalhe, s.capaVazia]}>
-                <Text style={{ fontSize: 64 }}>📖</Text>
-              </View>
-            )}
-
-            {/* STATUS DESTAQUE */}
-            <View style={[
-              s.statusDetalhe,
-              {
-                backgroundColor: isDisponivel(livroDetalhe) ? "#E1F5EE" : "#FAEEDA",
-                borderColor: isDisponivel(livroDetalhe) ? VERDE : AMBER,
-              }
-            ]}>
-              <Text style={{
-                fontSize: 16, fontWeight: "bold",
-                color: isDisponivel(livroDetalhe) ? "#0F6E56" : AMBER,
-                textAlign: "center",
-              }}>
-                {isDisponivel(livroDetalhe)
-                  ? "✅ Disponível para empréstimo"
-                  : "📤 Emprestado no momento"}
-              </Text>
-            </View>
-
-            {/* INFOS */}
-            <View style={s.infoCard}>
-              {[
-                { label: "Título", valor: livroDetalhe.titulo },
-                { label: "Autor", valor: livroDetalhe.autor },
-                { label: "Editora", valor: livroDetalhe.editora },
-                { label: "Categoria", valor: obterCategoriaLivro(livroDetalhe.categoria).label },
-                { label: "ISBN", valor: livroDetalhe.isbn },
-              ].filter(i => i.valor).map((item) => (
-                <View key={item.label} style={s.infoRow}>
-                  <Text style={s.infoLabel}>{item.label}</Text>
-                  <Text style={s.infoValor}>{item.valor}</Text>
-                </View>
-              ))}
-            </View>
-
-            <Text style={s.infoRodape}>
-              Para emprestar este livro, fale com o administrador da biblioteca.
-            </Text>
-          </ScrollView>
-        )}
-      </Modal>
+        livro={livroDetalhe}
+        emprestimosAtivos={emprestimos}
+        permitirEditarLocalizacao={modoAdmin}
+        onSalvarLocalizacao={modoAdmin ? salvarLocalizacaoDetalhe : undefined}
+        onClose={() => setLivroDetalhe(null)}
+        textoRodape={
+          modoAdmin
+            ? undefined
+            : "Para emprestar este livro, fale com o administrador da biblioteca."
+        }
+      />
     </View>
   );
 }
@@ -348,6 +297,7 @@ const s = StyleSheet.create({
   },
   cardTitulo: { fontSize: 14, fontWeight: "bold", color: "#1a1a18" },
   cardAutor: { fontSize: 12, color: "#666", marginTop: 2 },
+  cardEstante: { fontSize: 11, color: "#777", marginTop: 2 },
   cardCategoria: { fontSize: 11, fontWeight: "700" },
   categoriaBadge: {
     alignSelf: "flex-start",

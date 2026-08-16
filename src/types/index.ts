@@ -10,6 +10,7 @@ export interface Livro {
   codigoBarras: string;
   subtitulo?: string;
   categoria: string;
+  localizacaoEstante?: string;
   dataPublicacao?: string;
   paginas?: number;
   descricao?: string;

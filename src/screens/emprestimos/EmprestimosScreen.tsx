@@ -22,7 +22,13 @@ import {
   limparHistoricoEmprestimosFinalizados,
   registrarDevolucao,
 } from "../../services/emprestimos";
-import { buscarLivros, calcularQuantidadeDisponivel, livroTemExemplarDisponivel, normalizarTextoBusca } from "../../services/livros";
+import {
+  buscarLivros,
+  calcularQuantidadeDisponivel,
+  livroTemExemplarDisponivel,
+  normalizarTextoBusca,
+  obterTextoLocalizacaoEstante,
+} from "../../services/livros";
 import { buscarPessoas } from "../../services/pessoas";
 import { Emprestimo, Livro, Pessoa } from "../../types";
 
@@ -288,7 +294,7 @@ export default function EmprestimosScreen() {
   const termoBuscaLivro = normalizarTextoBusca(buscaLivro);
   const livrosParaSelecao = livros
     .filter((l) =>
-      normalizarTextoBusca(`${l.titulo} ${l.autor} ${l.isbn} ${l.codigoBarras}`)
+      normalizarTextoBusca(`${l.titulo} ${l.autor} ${l.isbn} ${l.codigoBarras} ${l.localizacaoEstante}`)
         .includes(termoBuscaLivro)
     )
     .sort((a, b) => {
@@ -494,7 +500,7 @@ export default function EmprestimosScreen() {
             <View style={{ flex: 1 }}>
               <Text style={s.modalTitle}>📖 Escolha o livro</Text>
               <TextInput
-                placeholder="Buscar livro..."
+                placeholder="Buscar livro, ISBN ou estante..."
                 value={buscaLivro}
                 onChangeText={setBuscaLivro}
                 style={s.input}
@@ -534,6 +540,7 @@ export default function EmprestimosScreen() {
                       <View style={{ flex: 1 }}>
                         <Text style={s.opcaoTitulo}>{l.titulo}</Text>
                         <Text style={s.opcaoSub}>{l.autor}</Text>
+                        <Text style={s.opcaoMeta}>Estante: {obterTextoLocalizacaoEstante(l)}</Text>
                         {l.isbn ? <Text style={s.opcaoMeta}>ISBN: {l.isbn}</Text> : null}
                         <Text style={[s.opcaoMeta, { color: disponivel ? VERDE : VERMELHO }]}>
                           {disponivel ? `${quantidadeLivre} exemplar(es) livre(s)` : "Indisponível"}
@@ -568,6 +575,9 @@ export default function EmprestimosScreen() {
               {livroSelecionado && (
                 <View style={s.livroSelecionadoCard}>
                   <Text style={s.livroSelecionadoTxt}>📖 {livroSelecionado.titulo}</Text>
+                  <Text style={s.livroSelecionadoMeta}>
+                    Estante: {obterTextoLocalizacaoEstante(livroSelecionado)}
+                  </Text>
                 </View>
               )}
 
@@ -619,6 +629,8 @@ export default function EmprestimosScreen() {
                 <Text style={s.resumoValor}>{livroSelecionado?.titulo}</Text>
                 <Text style={s.resumoLabel}>Autor</Text>
                 <Text style={s.resumoValor}>{livroSelecionado?.autor}</Text>
+                <Text style={s.resumoLabel}>Localização na estante</Text>
+                <Text style={s.resumoValor}>{obterTextoLocalizacaoEstante(livroSelecionado)}</Text>
                 <Text style={s.resumoLabel}>Pessoa</Text>
                 <Text style={s.resumoValor}>{pessoaSelecionada?.nome}</Text>
                 <Text style={s.resumoLabel}>Telefone</Text>
@@ -788,6 +800,7 @@ const s = StyleSheet.create({
     marginBottom: 12, borderLeftWidth: 3, borderLeftColor: VERDE,
   },
   livroSelecionadoTxt: { color: VERDE, fontWeight: "600", fontSize: 14 },
+  livroSelecionadoMeta: { color: "#477267", fontSize: 12, marginTop: 3 },
   opcaoCard: {
     backgroundColor: "#fff", padding: 14, borderRadius: 12,
     marginBottom: 8, borderWidth: 1, borderColor: "#e0e0e0",

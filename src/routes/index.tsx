@@ -51,7 +51,10 @@ export const Routes = () => {
       <Stack.Navigator screenOptions={{ headerShown: false }}>
         {user ? (
           // ADM logado — acesso total
-          <Stack.Screen name="App" component={TabRoutes} />
+          <>
+            <Stack.Screen name="App" component={TabRoutes} />
+            <Stack.Screen name="Acervo" component={AcervoScreen} />
+          </>
         ) : (
           // Não logado — tela de boas vindas + acervo público
           <>

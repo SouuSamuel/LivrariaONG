@@ -67,6 +67,7 @@ export const montarTextoBuscaLivro = (livro: Partial<Livro>) =>
       livro.autor,
       livro.editora,
       livro.categoria,
+      livro.localizacaoEstante,
       livro.isbn,
       livro.codigoBarras,
     ]
@@ -93,6 +94,9 @@ export const obterCategoriaLivro = (categoria: unknown) => {
     : { valor: '', label: 'Sem categoria', cor: '#777', legado: true };
 };
 
+export const obterTextoLocalizacaoEstante = (livro: Partial<Livro> | null | undefined) =>
+  textoLimpo(livro?.localizacaoEstante) || 'Não informada';
+
 const atribuirTexto = (destino: Record<string, unknown>, chave: string, valor: unknown) => {
   const limpo = textoLimpo(valor);
   if (limpo) destino[chave] = limpo;
@@ -105,10 +109,16 @@ export const prepararLivroParaFirestore = (livro: Partial<Livro>) => {
     quantidadeTotal
   );
   const categoria = normalizarCategoriaLivro(livro.categoria);
+  const localizacaoEstante = textoLimpo(livro.localizacaoEstante);
 
   if (!categoria) {
     const erro = new Error('Categoria do livro inválida.');
     (erro as any).code = 'livros/categoria-invalida';
+    throw erro;
+  }
+  if (!localizacaoEstante) {
+    const erro = new Error('Localização na estante é obrigatória.');
+    (erro as any).code = 'livros/localizacao-obrigatoria';
     throw erro;
   }
 
@@ -116,6 +126,7 @@ export const prepararLivroParaFirestore = (livro: Partial<Livro>) => {
     titulo: textoLimpo(livro.titulo),
     autor: textoLimpo(livro.autor),
     categoria,
+    localizacaoEstante,
     status: 'Disponível',
     disponivel: true,
     quantidadeTotal,
@@ -180,6 +191,7 @@ export const normalizarLivroDados = (id: string, data: DocumentData): Livro => {
     isbn: texto(data.isbn),
     codigoBarras: texto(data.codigoBarras),
     categoria: texto(data.categoria),
+    localizacaoEstante: texto(data.localizacaoEstante),
     status,
     imagem:
       texto(data.imagem) ||
@@ -267,6 +279,38 @@ export const buscarLivrosPorTexto = async (termo: string): Promise<Livro[]> => {
 
 export const atualizarLivro = (id: string, dados: Partial<Livro>) =>
   updateDoc(doc(db, 'livros', id), dados);
+
+export const atualizarLocalizacaoEstanteLivro = async (
+  livro: Livro,
+  localizacaoEstante: string
+) => {
+  if (!livro.id) {
+    throw new Error('Livro sem identificador para atualizar localização.');
+  }
+
+  const localizacaoLimpa = textoLimpo(localizacaoEstante);
+  if (!localizacaoLimpa) {
+    const erro = new Error('Localização na estante é obrigatória.');
+    (erro as any).code = 'livros/localizacao-obrigatoria';
+    throw erro;
+  }
+
+  const livroAtualizado = {
+    ...livro,
+    localizacaoEstante: localizacaoLimpa,
+  };
+  const busca = montarTextoBuscaLivro(livroAtualizado);
+
+  await updateDoc(doc(db, 'livros', livro.id), {
+    localizacaoEstante: localizacaoLimpa,
+    busca,
+  });
+
+  return {
+    ...livroAtualizado,
+    busca,
+  };
+};
 
 export const excluirLivro = (id: string) =>
   deleteDoc(doc(db, 'livros', id));

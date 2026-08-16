@@ -213,17 +213,40 @@ export default function HomeScreen({ navigation }: any) {
       {/* STATS */}
       <View style={s.statsGrid}>
         {[
-          { label: "Livros", valor: stats.livros, cor: VERDE, icone: "📚" },
+          {
+            label: "Livros\ncadastrados",
+            valor: stats.livros,
+            cor: VERDE,
+            icone: "📚",
+            onPress: () => navigation.navigate("Acervo", { modoAdmin: true }),
+          },
           { label: "Pessoas", valor: stats.pessoas, cor: AZUL, icone: "👤" },
           { label: "Emprestados", valor: stats.ativos, cor: AMBER, icone: "📋" },
           { label: "Atrasados", valor: stats.atrasados, cor: VERMELHO, icone: "⚠️" },
-        ].map((item) => (
-          <View key={item.label} style={s.statCard}>
-            <Text style={s.statIcone}>{item.icone}</Text>
-            <Text style={[s.statNum, { color: item.cor }]}>{item.valor}</Text>
-            <Text style={s.statLbl}>{item.label}</Text>
-          </View>
-        ))}
+        ].map((item) => {
+          const conteudo = (
+            <>
+              <Text style={s.statIcone}>{item.icone}</Text>
+              <Text style={[s.statNum, { color: item.cor }]}>{item.valor}</Text>
+              <Text style={s.statLbl}>{item.label}</Text>
+            </>
+          );
+
+          return item.onPress ? (
+            <TouchableOpacity
+              key={item.label}
+              style={s.statCard}
+              onPress={item.onPress}
+              accessibilityRole="button"
+            >
+              {conteudo}
+            </TouchableOpacity>
+          ) : (
+            <View key={item.label} style={s.statCard}>
+              {conteudo}
+            </View>
+          );
+        })}
       </View>
 
       {/* AÇÕES RÁPIDAS */}

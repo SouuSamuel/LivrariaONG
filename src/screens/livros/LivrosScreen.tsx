@@ -25,6 +25,7 @@ import {
   excluirLivro,
   normalizarCategoriaLivro,
   obterCategoriaLivro,
+  obterTextoLocalizacaoEstante,
   prepararLivroParaFirestore,
 } from "../../services/livros";
 import {
@@ -186,6 +187,7 @@ export default function LivrosScreen({ route }: any) {
       titulo: atual.titulo?.trim() || "",
       autor: atual.autor?.trim() || "",
       isbn: atual.isbn?.trim() || "",
+      localizacaoEstante: atual.localizacaoEstante?.trim() || "",
       categoria,
       modalAberto: modalFormRef.current,
       timestamp: Date.now(),
@@ -226,6 +228,8 @@ export default function LivrosScreen({ route }: any) {
       autor: typeof rascunho.autor === "string" ? rascunho.autor : "",
       isbn,
       codigoBarras: isbn || f.codigoBarras,
+      localizacaoEstante:
+        typeof rascunho.localizacaoEstante === "string" ? rascunho.localizacaoEstante : "",
       categoria: normalizarCategoriaLivro(rascunho.categoria) || f.categoria,
       status: "Disponível",
     }));
@@ -398,6 +402,7 @@ export default function LivrosScreen({ route }: any) {
       isbn: dados.isbn || f.isbn,
       codigoBarras: dados.codigoBarras || dados.isbn || f.codigoBarras,
       categoria: normalizarCategoriaLivro(dados.categoria) || f.categoria,
+      localizacaoEstante: f.localizacaoEstante,
       imagem: f.imagem || imagemApi,
       imagemStoragePath: f.imagemStoragePath,
       imagemCloudinaryPublicId: f.imagemCloudinaryPublicId,
@@ -485,6 +490,7 @@ export default function LivrosScreen({ route }: any) {
     const titulo = form.titulo?.trim();
     const autor = form.autor?.trim();
     const categoria = normalizarCategoriaLivro(form.categoria);
+    const localizacaoEstante = form.localizacaoEstante?.trim() || "";
     const isbnDigitado = form.isbn?.trim() || "";
     const isbnNormalizado = isbnDigitado ? normalizarISBN(isbnDigitado) : null;
 
@@ -493,6 +499,12 @@ export default function LivrosScreen({ route }: any) {
     }
     if (!categoria) {
       return Alert.alert("Categoria obrigatória", "Escolha Jovem, Criança ou Adolescente.");
+    }
+    if (!localizacaoEstante) {
+      return Alert.alert(
+        "Localização obrigatória",
+        "Informe onde o livro está guardado na estante."
+      );
     }
     if (isbnDigitado && !isbnNormalizado) {
       return Alert.alert("ISBN inválido", "Revise o ISBN informado ou deixe o campo vazio.");
@@ -559,6 +571,7 @@ export default function LivrosScreen({ route }: any) {
         titulo,
         autor,
         categoria,
+        localizacaoEstante,
         isbn: isbnFinal,
         codigoBarras: isbnFinal,
         imagem: imagemFinal,
@@ -741,6 +754,7 @@ export default function LivrosScreen({ route }: any) {
                 <View style={{ flex: 1 }}>
                   <Text style={s.cardTitle} numberOfLines={2}>{item.titulo}</Text>
                   <Text style={s.cardSub}>{item.autor}</Text>
+                  <Text style={s.cardMeta}>Estante: {obterTextoLocalizacaoEstante(item)}</Text>
                   {item.editora ? (
                     <Text style={s.cardMeta}>{item.editora}</Text>
                   ) : null}
@@ -869,6 +883,7 @@ export default function LivrosScreen({ route }: any) {
             { label: "Título *", key: "titulo", placeholder: "Ex: Dom Casmurro" },
             { label: "Autor *", key: "autor", placeholder: "Ex: Machado de Assis" },
             { label: "ISBN", key: "isbn", placeholder: "Opcional" },
+            { label: "Localização na estante *", key: "localizacaoEstante", placeholder: "Ex: Estante azul, Prateleira 2" },
           ].map((campo) => (
             <View key={campo.key} style={{ marginBottom: 12 }}>
               <Text style={s.label}>{campo.label}</Text>
