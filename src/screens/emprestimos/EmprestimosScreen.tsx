@@ -14,9 +14,12 @@ import {
 } from "react-native";
 import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import { CameraView, Camera } from "expo-camera";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
   criarEmprestimoComTransacao,
   buscarEmprestimos,
+  contarEmprestimosFinalizados,
+  limparHistoricoEmprestimosFinalizados,
   registrarDevolucao,
 } from "../../services/emprestimos";
 import { buscarLivros, calcularQuantidadeDisponivel, livroTemExemplarDisponivel, normalizarTextoBusca } from "../../services/livros";
@@ -39,6 +42,10 @@ export default function EmprestimosScreen() {
   const [filtro, setFiltro] = useState<"todos" | "ativos" | "atrasados">("todos");
   const [scanAtivo, setScanAtivo] = useState(false);
   const [buscandoLivro, setBuscandoLivro] = useState(false);
+  const [modalLimpeza, setModalLimpeza] = useState(false);
+  const [confirmacaoLimpeza, setConfirmacaoLimpeza] = useState("");
+  const [totalParaLimpar, setTotalParaLimpar] = useState(0);
+  const [limpandoHistorico, setLimpandoHistorico] = useState(false);
 
   // Form
   const [livroSelecionado, setLivroSelecionado] = useState<Livro | null>(null);
@@ -49,6 +56,7 @@ export default function EmprestimosScreen() {
   const [buscaPessoa, setBuscaPessoa] = useState("");
   const [erro, setErro] = useState("");
   const navigation = useNavigation<any>();
+  const insets = useSafeAreaInsets();
 
   useFocusEffect(
     useCallback(() => {
@@ -195,6 +203,72 @@ export default function EmprestimosScreen() {
     );
   };
 
+  const abrirLimpezaHistorico = async () => {
+    if (limpandoHistorico) return;
+
+    setLimpandoHistorico(true);
+    try {
+      const total = await contarEmprestimosFinalizados();
+
+      if (total === 0) {
+        Alert.alert("Histórico vazio", "O histórico de empréstimos finalizados já está vazio.");
+        return;
+      }
+
+      Alert.alert(
+        "Limpar histórico de empréstimos",
+        `${total} empréstimo(s) finalizado(s) serão apagados.`,
+        [
+          { text: "Cancelar", style: "cancel" },
+          {
+            text: "Continuar",
+            onPress: () => {
+              setTotalParaLimpar(total);
+              setConfirmacaoLimpeza("");
+              setModalLimpeza(true);
+            },
+          },
+        ]
+      );
+    } catch (e) {
+      console.error("Erro ao contar empréstimos finalizados:", e);
+      Alert.alert("Erro", "Não foi possível calcular o histórico finalizado agora.");
+    } finally {
+      setLimpandoHistorico(false);
+    }
+  };
+
+  const confirmarLimpezaHistorico = async () => {
+    if (limpandoHistorico || confirmacaoLimpeza !== "EXCLUIR") return;
+
+    setLimpandoHistorico(true);
+    try {
+      const resultado = await limparHistoricoEmprestimosFinalizados();
+      setModalLimpeza(false);
+      setConfirmacaoLimpeza("");
+      setTotalParaLimpar(0);
+      await carregar();
+
+      if (resultado.falhas > 0) {
+        Alert.alert(
+          "Limpeza parcial",
+          `${resultado.removidos} empréstimo(s) finalizado(s) foram excluídos. ${resultado.falhas} falharam.`
+        );
+        return;
+      }
+
+      Alert.alert(
+        "Histórico limpo",
+        `${resultado.removidos} empréstimo(s) finalizado(s) foram excluídos.`
+      );
+    } catch (e) {
+      console.error("Erro ao limpar histórico de empréstimos:", e);
+      Alert.alert("Erro", "Não foi possível limpar o histórico de empréstimos agora.");
+    } finally {
+      setLimpandoHistorico(false);
+    }
+  };
+
   const fmt = (iso: string) => new Date(iso).toLocaleDateString("pt-BR");
 
   const isAtrasado = (emp: Emprestimo) =>
@@ -281,6 +355,21 @@ export default function EmprestimosScreen() {
         </TouchableOpacity>
       </View>
 
+      <View style={s.gerenciamento}>
+        <Text style={s.gerenciamentoTitulo}>Gerenciamento</Text>
+        <TouchableOpacity
+          style={[s.gerenciamentoBtn, limpandoHistorico && s.gerenciamentoBtnDisabled]}
+          onPress={abrirLimpezaHistorico}
+          disabled={limpandoHistorico}
+        >
+          {limpandoHistorico ? (
+            <ActivityIndicator color="#555" />
+          ) : (
+            <Text style={s.gerenciamentoTxt}>Limpar histórico de empréstimos</Text>
+          )}
+        </TouchableOpacity>
+      </View>
+
       {/* LISTA */}
       {loading ? (
         <ActivityIndicator color={VERDE} size="large" style={{ marginTop: 40 }} />
@@ -299,7 +388,7 @@ export default function EmprestimosScreen() {
         <FlatList
           data={empFiltrados}
           keyExtractor={(i) => i.id!}
-          contentContainerStyle={{ padding: 12 }}
+          contentContainerStyle={{ padding: 12, paddingBottom: Math.max(insets.bottom + 12, 24) }}
           renderItem={({ item }) => {
             const atrasado = isAtrasado(item);
             const devolvido = item.status === "Devolvido";
@@ -574,6 +663,70 @@ export default function EmprestimosScreen() {
           )}
         </View>
       </Modal>
+
+      <Modal
+        visible={modalLimpeza}
+        animationType="fade"
+        transparent
+        onRequestClose={() => !limpandoHistorico && setModalLimpeza(false)}
+      >
+        <View style={s.confirmacaoOverlay}>
+          <View style={s.confirmacaoCard}>
+            <ScrollView
+              keyboardShouldPersistTaps="handled"
+              contentContainerStyle={[
+                s.confirmacaoConteudo,
+                { paddingBottom: Math.max(insets.bottom, 16) },
+              ]}
+            >
+              <Text style={s.confirmacaoTitulo}>Limpar histórico</Text>
+              <Text style={s.confirmacaoTexto}>
+                Esta ação excluirá permanentemente {totalParaLimpar} empréstimos finalizados. Os empréstimos ativos e atrasados não serão alterados. Essa ação não pode ser desfeita.
+              </Text>
+              <Text style={s.confirmacaoInstrucao}>
+                Digite EXCLUIR para confirmar.
+              </Text>
+              <TextInput
+                value={confirmacaoLimpeza}
+                onChangeText={setConfirmacaoLimpeza}
+                autoCapitalize="characters"
+                autoCorrect={false}
+                editable={!limpandoHistorico}
+                placeholder="EXCLUIR"
+                placeholderTextColor="#999"
+                style={s.confirmacaoInput}
+              />
+              <View style={s.confirmacaoAcoes}>
+                <TouchableOpacity
+                  style={[s.confirmacaoBtn, s.confirmacaoBtnCancelar]}
+                  onPress={() => {
+                    setModalLimpeza(false);
+                    setConfirmacaoLimpeza("");
+                  }}
+                  disabled={limpandoHistorico}
+                >
+                  <Text style={s.confirmacaoCancelarTxt}>Cancelar</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[
+                    s.confirmacaoBtn,
+                    s.confirmacaoBtnExcluir,
+                    (confirmacaoLimpeza !== "EXCLUIR" || limpandoHistorico) && s.confirmacaoBtnDisabled,
+                  ]}
+                  onPress={confirmarLimpezaHistorico}
+                  disabled={confirmacaoLimpeza !== "EXCLUIR" || limpandoHistorico}
+                >
+                  {limpandoHistorico ? (
+                    <ActivityIndicator color="#fff" />
+                  ) : (
+                    <Text style={s.confirmacaoExcluirTxt}>Excluir histórico</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -600,6 +753,16 @@ const s = StyleSheet.create({
   btnOutline: { backgroundColor: "#fff", borderWidth: 1, borderColor: VERDE },
   btnDisabled: { backgroundColor: "#ccc" },
   btnText: { color: "#fff", fontWeight: "bold", fontSize: 14 },
+  gerenciamento: { paddingHorizontal: 10, paddingTop: 6, paddingBottom: 8 },
+  gerenciamentoTitulo: {
+    fontSize: 11, color: "#777", fontWeight: "700", textTransform: "uppercase", marginBottom: 6,
+  },
+  gerenciamentoBtn: {
+    backgroundColor: "#fff", borderWidth: 1, borderColor: "#ddd",
+    borderRadius: 10, padding: 11, alignItems: "center",
+  },
+  gerenciamentoBtnDisabled: { opacity: 0.6 },
+  gerenciamentoTxt: { color: "#444", fontWeight: "600", fontSize: 13 },
   vazio: { flex: 1, alignItems: "center", justifyContent: "center", marginTop: 60 },
   vazioTxt: { fontSize: 16, color: "#555" },
   card: {
@@ -677,4 +840,27 @@ const s = StyleSheet.create({
     backgroundColor: "rgba(0,0,0,0.6)", padding: 12,
     borderRadius: 20, paddingHorizontal: 20,
   },
+  confirmacaoOverlay: {
+    flex: 1, backgroundColor: "rgba(0,0,0,0.42)",
+    justifyContent: "flex-end",
+  },
+  confirmacaoCard: {
+    backgroundColor: "#fff", borderTopLeftRadius: 18, borderTopRightRadius: 18,
+    maxHeight: "82%",
+  },
+  confirmacaoConteudo: { padding: 20, paddingTop: 22 },
+  confirmacaoTitulo: { fontSize: 20, fontWeight: "bold", color: "#1a1a18", marginBottom: 10 },
+  confirmacaoTexto: { fontSize: 14, lineHeight: 20, color: "#A32D2D", marginBottom: 16 },
+  confirmacaoInstrucao: { fontSize: 13, color: "#555", marginBottom: 8, fontWeight: "600" },
+  confirmacaoInput: {
+    borderWidth: 1, borderColor: "#ddd", borderRadius: 10,
+    padding: 12, color: "#1a1a18", fontSize: 16, backgroundColor: "#FAFAFA",
+  },
+  confirmacaoAcoes: { flexDirection: "row", gap: 10, marginTop: 18 },
+  confirmacaoBtn: { flex: 1, padding: 12, borderRadius: 10, alignItems: "center" },
+  confirmacaoBtnCancelar: { backgroundColor: "#F0F0F0" },
+  confirmacaoCancelarTxt: { color: "#444", fontWeight: "700" },
+  confirmacaoBtnExcluir: { backgroundColor: VERMELHO },
+  confirmacaoBtnDisabled: { opacity: 0.45 },
+  confirmacaoExcluirTxt: { color: "#fff", fontWeight: "700" },
 });

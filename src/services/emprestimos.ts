@@ -6,12 +6,16 @@ import {
   query,
   runTransaction,
   where,
+  writeBatch,
 } from 'firebase/firestore';
+import type { DocumentData, QueryDocumentSnapshot } from 'firebase/firestore';
 import { db } from './firebase';
 import { Emprestimo, Livro, Pessoa } from '../types';
 import { normalizarLivroDados } from './livros';
 
 const col = collection(db, 'emprestimos');
+export const STATUS_EMPRESTIMO_FINALIZADO = 'Devolvido';
+export const TAMANHO_LOTE_LIMPEZA_EMPRESTIMOS = 400;
 
 interface CriarEmprestimoParams {
   livro: Livro;
@@ -19,7 +23,71 @@ interface CriarEmprestimoParams {
   diasPrazo: number;
 }
 
+export interface ResultadoLimpezaHistoricoEmprestimos {
+  total: number;
+  removidos: number;
+  falhas: number;
+  lotes: number;
+  lotesComFalha: number;
+}
+
 export const criarEmprestimo = (emp: Emprestimo) => addDoc(col, emp);
+
+export const emprestimoEstaFinalizado = (emprestimo: Pick<Emprestimo, 'status'>) =>
+  emprestimo.status === STATUS_EMPRESTIMO_FINALIZADO;
+
+export const dividirEmLotes = <T>(itens: T[], tamanho = TAMANHO_LOTE_LIMPEZA_EMPRESTIMOS) => {
+  const lotes: T[][] = [];
+  for (let indice = 0; indice < itens.length; indice += tamanho) {
+    lotes.push(itens.slice(indice, indice + tamanho));
+  }
+  return lotes;
+};
+
+const buscarDocsEmprestimosFinalizados = async (): Promise<QueryDocumentSnapshot<DocumentData>[]> => {
+  const q = query(col, where('status', '==', STATUS_EMPRESTIMO_FINALIZADO));
+  const snap = await getDocs(q);
+  return snap.docs;
+};
+
+export const contarEmprestimosFinalizados = async () => {
+  const docs = await buscarDocsEmprestimosFinalizados();
+  return docs.length;
+};
+
+export const limparHistoricoEmprestimosFinalizados =
+  async (): Promise<ResultadoLimpezaHistoricoEmprestimos> => {
+    const docs = await buscarDocsEmprestimosFinalizados();
+    const lotes = dividirEmLotes(docs);
+    const resultado: ResultadoLimpezaHistoricoEmprestimos = {
+      total: docs.length,
+      removidos: 0,
+      falhas: 0,
+      lotes: lotes.length,
+      lotesComFalha: 0,
+    };
+
+    for (let indice = 0; indice < lotes.length; indice += 1) {
+      const lote = lotes[indice];
+      const batch = writeBatch(db);
+      lote.forEach((emprestimoDoc) => batch.delete(emprestimoDoc.ref));
+
+      try {
+        await batch.commit();
+        resultado.removidos += lote.length;
+      } catch (erro) {
+        resultado.falhas += lote.length;
+        resultado.lotesComFalha += 1;
+        console.error('Erro ao limpar lote de emprestimos finalizados:', {
+          lote: indice + 1,
+          quantidade: lote.length,
+          erro,
+        });
+      }
+    }
+
+    return resultado;
+  };
 
 export const criarEmprestimoComTransacao = async ({
   livro,
