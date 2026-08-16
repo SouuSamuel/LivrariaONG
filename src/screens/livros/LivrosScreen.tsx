@@ -27,7 +27,13 @@ import {
   obterCategoriaLivro,
   prepararLivroParaFirestore,
 } from "../../services/livros";
-import { descreverErroImagem, enviarImagemLivro, prepararImagemLivro, removerImagemLivro } from "../../services/imagens";
+import {
+  type ImagemLivroEntrada,
+  descreverErroImagem,
+  enviarImagemLivro,
+  prepararImagemLivro,
+  removerImagemLivro,
+} from "../../services/imagens";
 import { buscarLivroPorISBN, deveIgnorarScanDuplicado, normalizarCodigoISBN, normalizarISBN } from "../../services/isbn";
 import { Livro } from "../../types";
 import type { DocumentData, QueryDocumentSnapshot } from "firebase/firestore";
@@ -61,6 +67,7 @@ export default function LivrosScreen({ route }: any) {
   const [temMais, setTemMais] = useState(false);
   const [carregandoMais, setCarregandoMais] = useState(false);
   const [imagemLocalUri, setImagemLocalUri] = useState<string | null>(null);
+  const [imagemLocalInfo, setImagemLocalInfo] = useState<ImagemLivroEntrada | null>(null);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [abrindoSeletorCapa, setAbrindoSeletorCapa] = useState(false);
   const ultimoScanRef = useRef<{ codigo: string; timestamp: number } | null>(null);
@@ -119,6 +126,7 @@ export default function LivrosScreen({ route }: any) {
       void limparRascunhoCadastroLivro();
       setForm({ isbn, codigoBarras: isbn, status: "Disponível" });
       setImagemLocalUri(null);
+      setImagemLocalInfo(null);
       setModalForm(true);
       buscarPorISBN(isbn);
     }
@@ -244,7 +252,18 @@ export default function LivrosScreen({ route }: any) {
     if (!montadoRef.current) return false;
 
     setImagemLocalUri(asset.uri);
-    setForm((f) => ({ ...f, imagem: asset.uri, imagemStoragePath: undefined }));
+    setImagemLocalInfo({
+      uri: asset.uri,
+      mimeType: asset.mimeType || "image/jpeg",
+      width: asset.width,
+      height: asset.height,
+    });
+    setForm((f) => ({
+      ...f,
+      imagem: asset.uri,
+      imagemStoragePath: undefined,
+      imagemCloudinaryPublicId: undefined,
+    }));
     setModalForm(true);
     return true;
   };
@@ -352,7 +371,13 @@ export default function LivrosScreen({ route }: any) {
 
   const removerCapa = () => {
     setImagemLocalUri(null);
-    setForm((f) => ({ ...f, imagem: "", imagemStoragePath: undefined }));
+    setImagemLocalInfo(null);
+    setForm((f) => ({
+      ...f,
+      imagem: "",
+      imagemStoragePath: undefined,
+      imagemCloudinaryPublicId: undefined,
+    }));
   };
 
   const cancelarCadastroLivro = async () => {
@@ -361,6 +386,7 @@ export default function LivrosScreen({ route }: any) {
     setModalForm(false);
     setForm({});
     setImagemLocalUri(null);
+    setImagemLocalInfo(null);
   };
 
   const aplicarDadosISBN = (dados: Partial<Livro>) => {
@@ -374,6 +400,7 @@ export default function LivrosScreen({ route }: any) {
       categoria: normalizarCategoriaLivro(dados.categoria) || f.categoria,
       imagem: f.imagem || imagemApi,
       imagemStoragePath: f.imagemStoragePath,
+      imagemCloudinaryPublicId: f.imagemCloudinaryPublicId,
       status: "Disponível",
     }));
   };
@@ -443,6 +470,7 @@ export default function LivrosScreen({ route }: any) {
     setModalScan(false);
     setModalForm(true);
     setImagemLocalUri(null);
+    setImagemLocalInfo(null);
     void limparRascunhoCadastroLivro();
 
     console.log("Código lido:", data);
@@ -473,14 +501,14 @@ export default function LivrosScreen({ route }: any) {
     setSalvando(true);
     setUploadProgress(0);
 
-    let imagemEnviada: { url: string; storagePath: string } | undefined;
+    let imagemEnviada: { url: string; publicId: string } | undefined;
     try {
       let imagemFinal = form.imagem || "";
-      let imagemStoragePath = form.imagemStoragePath;
+      let imagemCloudinaryPublicId = form.imagemCloudinaryPublicId;
       const origemCapa = imagemLocalUri ? "foto_local" : form.imagem ? "capa_remota_ou_existente" : "sem_foto";
       console.log("Cadastro de livro: origem da capa", {
         origemCapa,
-        usaStorage: Boolean(imagemLocalUri),
+        usaCloudinary: Boolean(imagemLocalUri),
       });
 
       if (!imagemLocalUri && imagemFinal && !imagemFinal.startsWith("https://")) {
@@ -489,13 +517,15 @@ export default function LivrosScreen({ route }: any) {
           prefixo: imagemFinal.slice(0, 16),
         });
         imagemFinal = "";
-        imagemStoragePath = undefined;
+        imagemCloudinaryPublicId = undefined;
       }
 
       if (imagemLocalUri) {
         try {
-          const imagemPreparada = await prepararImagemLivro(imagemLocalUri, (progresso) =>
-            montadoRef.current && setUploadProgress(progresso * 0.55)
+          const imagemPreparada = await prepararImagemLivro(
+            imagemLocalInfo || { uri: imagemLocalUri, mimeType: "image/jpeg" },
+            (progresso) =>
+              montadoRef.current && setUploadProgress(progresso * 0.55)
           );
           imagemEnviada = await enviarImagemLivro(
             imagemPreparada,
@@ -503,19 +533,21 @@ export default function LivrosScreen({ route }: any) {
             (progresso) => montadoRef.current && setUploadProgress(0.55 + progresso * 0.4)
           );
           imagemFinal = imagemEnviada.url;
-          imagemStoragePath = imagemEnviada.storagePath;
+          imagemCloudinaryPublicId = imagemEnviada.publicId;
           if (montadoRef.current) setUploadProgress(1);
         } catch (e) {
           const erroImagem = descreverErroImagem(e, {
             etapa: "salvar-livro",
             uri: imagemLocalUri,
-            mime: "image/jpeg",
+            mime: imagemLocalInfo?.mimeType || "image/jpeg",
           });
-          console.error("Falha no Storage ao enviar capa do livro:", erroImagem);
+          console.error("Falha no Cloudinary ao enviar capa do livro:", erroImagem);
           if (montadoRef.current) {
             Alert.alert(
-              "Falha no Storage",
-              `${erroImagem.mensagemUsuario}\n\nCódigo técnico: ${erroImagem.code}`
+              "Falha ao enviar capa",
+              erroImagem.status
+                ? `${erroImagem.mensagemUsuario}\n\nStatus técnico: ${erroImagem.status}`
+                : erroImagem.mensagemUsuario
             );
           }
           return;
@@ -530,7 +562,7 @@ export default function LivrosScreen({ route }: any) {
         isbn: isbnFinal,
         codigoBarras: isbnFinal,
         imagem: imagemFinal,
-        imagemStoragePath,
+        imagemCloudinaryPublicId,
         quantidadeTotal: 1,
         quantidadeDisponivel: 1,
         status: "Disponível",
@@ -542,18 +574,18 @@ export default function LivrosScreen({ route }: any) {
         campos: Object.keys(livroParaSalvar),
         categoria: livroParaSalvar.categoria,
         temImagem: Boolean(livroParaSalvar.imagem),
-        temImagemStoragePath: Boolean(livroParaSalvar.imagemStoragePath),
+        temImagemCloudinaryPublicId: Boolean(livroParaSalvar.imagemCloudinaryPublicId),
       });
 
       try {
         await adicionarLivro(livroParaSalvar);
       } catch (e) {
         console.error("Falha no Firestore ao salvar livro:", e);
-        if (imagemEnviada?.storagePath) {
+        if (imagemEnviada?.publicId) {
           try {
-            await removerImagemLivro(imagemEnviada.storagePath);
+            await removerImagemLivro(imagemEnviada.publicId);
           } catch (erroRemocao) {
-            console.error("Erro ao remover imagem após falha no Firestore:", erroRemocao);
+            console.error("Erro ao registrar pendência de remoção da imagem após falha no Firestore:", erroRemocao);
           }
         }
 
@@ -571,16 +603,17 @@ export default function LivrosScreen({ route }: any) {
         setModalForm(false);
         setForm({});
         setImagemLocalUri(null);
+        setImagemLocalInfo(null);
         carregar(busca);
         Alert.alert("✅ Livro cadastrado!", "Agora você pode realizar o empréstimo.");
       }
     } catch (e) {
       console.error("Erro inesperado ao salvar livro:", e);
-      if (imagemEnviada?.storagePath) {
+      if (imagemEnviada?.publicId) {
         try {
-          await removerImagemLivro(imagemEnviada.storagePath);
+          await removerImagemLivro(imagemEnviada.publicId);
         } catch (erroRemocao) {
-          console.error("Erro ao remover imagem após falha inesperada:", erroRemocao);
+          console.error("Erro ao registrar pendência de remoção da imagem após falha inesperada:", erroRemocao);
         }
       }
       if (montadoRef.current) {
@@ -627,6 +660,7 @@ export default function LivrosScreen({ route }: any) {
             void limparRascunhoCadastroLivro();
             setForm({ status: "Disponível" });
             setImagemLocalUri(null);
+            setImagemLocalInfo(null);
             setModalForm(true);
           }}
         >
@@ -682,8 +716,14 @@ export default function LivrosScreen({ route }: any) {
                           try {
                             await removerImagemLivro(item.imagemStoragePath);
                           } catch (e) {
-                            console.error("Erro ao remover capa do Storage:", e);
+                            console.error("Erro ao registrar remoção de capa legada:", e);
                           }
+                        }
+                        if (item.imagemCloudinaryPublicId) {
+                          console.log(
+                            "Livro excluído; capa Cloudinary não foi removida pelo cliente.",
+                            { publicIdPresente: true }
+                          );
                         }
                         carregar(busca);
                       },

@@ -18,6 +18,7 @@ export interface Livro {
   status: 'Disponível' | 'Emprestado';
   imagem: string;
   imagemStoragePath?: string;
+  imagemCloudinaryPublicId?: string;
   quantidadeTotal?: number;
   quantidadeDisponivel?: number;
   quantidadeDisponivelInformada?: boolean;

@@ -128,7 +128,7 @@ export const prepararLivroParaFirestore = (livro: Partial<Livro>) => {
   const imagemPublica = textoLimpo(livro.imagem);
   if (imagemPublica.startsWith('https://')) {
     dados.imagem = imagemPublica;
-    atribuirTexto(dados, 'imagemStoragePath', livro.imagemStoragePath);
+    atribuirTexto(dados, 'imagemCloudinaryPublicId', livro.imagemCloudinaryPublicId);
   }
 
   dados.busca = montarTextoBuscaLivro(dados as Partial<Livro>);
@@ -191,6 +191,7 @@ export const normalizarLivroDados = (id: string, data: DocumentData): Livro => {
       texto(data.imagemStoragePath) ||
       texto(data.fotoStoragePath) ||
       texto(data.capaStoragePath),
+    imagemCloudinaryPublicId: texto(data.imagemCloudinaryPublicId),
     quantidadeTotal,
     quantidadeDisponivel: quantidadeDisponivel ?? undefined,
     quantidadeDisponivelInformada: quantidadeDisponivel !== undefined,

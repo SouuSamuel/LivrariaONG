@@ -1,7 +1,12 @@
 import { ImageManipulator, SaveFormat } from 'expo-image-manipulator';
-import { deleteObject, getDownloadURL, ref, uploadBytes } from 'firebase/storage';
 import { Platform } from 'react-native';
-import { auth, storage } from './firebase';
+
+export interface ImagemLivroEntrada {
+  uri: string;
+  mimeType?: string;
+  width?: number;
+  height?: number;
+}
 
 export interface ImagemLivroResultado {
   uri: string;
@@ -10,18 +15,36 @@ export interface ImagemLivroResultado {
 
 export interface ImagemLivroUpload {
   url: string;
-  storagePath: string;
-  metodo: 'xhr-blob' | 'storage-rest';
+  publicId: string;
+  width?: number;
+  height?: number;
+  format?: string;
+  bytes?: number;
 }
-
-const criarCaminhoCapaLivro = () =>
-  `livros/capas/${Date.now()}-${Math.random().toString(36).slice(2)}.jpg`;
 
 interface ContextoErroImagem {
   etapa?: string;
   uri?: string;
   mime?: string;
+  status?: number;
 }
+
+type CloudinaryResposta = {
+  secure_url?: string;
+  public_id?: string;
+  resource_type?: string;
+  width?: number;
+  height?: number;
+  format?: string;
+  bytes?: number;
+  error?: {
+    message?: string;
+  };
+};
+
+const CLOUDINARY_CLOUD_NAME = process.env.EXPO_PUBLIC_CLOUDINARY_CLOUD_NAME;
+const CLOUDINARY_UPLOAD_PRESET = process.env.EXPO_PUBLIC_CLOUDINARY_UPLOAD_PRESET;
+const DIMENSAO_MAXIMA_CAPA = 1000;
 
 const criarErroImagem = (
   code: string,
@@ -35,57 +58,64 @@ const criarErroImagem = (
   (erro as any).etapa = contexto.etapa;
   (erro as any).uri = contexto.uri;
   (erro as any).mime = contexto.mime;
+  (erro as any).status = contexto.status;
   return erro;
 };
 
-const descreverUriSemCaminho = (uri?: string) => {
-  if (!uri) return undefined;
-  const esquema = uri.match(/^([a-zA-Z][a-zA-Z0-9+.-]*):/)?.[1] || 'sem-esquema';
-  const extensao = uri.match(/\.([a-zA-Z0-9]+)(?:[?#].*)?$/)?.[1]?.toLowerCase();
-  return `${esquema}://${extensao ? `*.${extensao}` : 'sem-extensao'}`;
-};
+const texto = (valor: unknown) => (typeof valor === 'string' ? valor.trim() : '');
 
 const obterEsquemaUri = (uri?: string) =>
   uri?.match(/^([a-zA-Z][a-zA-Z0-9+.-]*):/)?.[1] || 'sem-esquema';
 
-const obterBucketStorage = () =>
-  storage.app.options.storageBucket?.replace(/^gs:\/\//, '');
-
-const criarDiagnosticoUpload = ({
-  metodo,
-  uri,
-  mime,
-  blob,
-  etapa,
-  erro,
-}: {
-  metodo: ImagemLivroUpload['metodo'];
-  uri: string;
-  mime?: string;
-  blob?: Blob;
-  etapa: string;
-  erro?: any;
-}) => ({
-  metodo,
-  esquemaUri: obterEsquemaUri(uri),
-  mime,
-  tamanhoBlob: typeof blob?.size === 'number' ? blob.size : undefined,
-  etapa,
-  code: typeof erro?.code === 'string' ? erro.code : undefined,
-  message: typeof erro?.message === 'string' ? erro.message : undefined,
-});
-
-const erroIndicaConversaoArrayBuffer = (erro: any) => {
-  const message = String(erro?.message || '').toLowerCase();
-  return (
-    message.includes('arraybuffer') ||
-    message.includes('arraybufferview') ||
-    (erro?.code === 'storage/unknown' && message.includes('blob'))
-  );
+const descreverUriSemCaminho = (uri?: string) => {
+  if (!uri) return undefined;
+  const extensao = uri.match(/\.([a-zA-Z0-9]+)(?:[?#].*)?$/)?.[1]?.toLowerCase();
+  return `${obterEsquemaUri(uri)}://${extensao ? `*.${extensao}` : 'sem-extensao'}`;
 };
 
+const gerarNomeArquivoCapa = () =>
+  `capa-${Date.now()}-${Math.random().toString(36).slice(2)}.jpg`;
+
+const obterConfigCloudinary = () => {
+  const cloudName = texto(CLOUDINARY_CLOUD_NAME);
+  const uploadPreset = texto(CLOUDINARY_UPLOAD_PRESET);
+
+  if (!cloudName || !uploadPreset) {
+    throw criarErroImagem(
+      'cloudinary/config-missing',
+      'Configuração do Cloudinary ausente no aplicativo.',
+      undefined,
+      { etapa: 'validacao-config-cloudinary' }
+    );
+  }
+
+  return { cloudName, uploadPreset };
+};
+
+const criarDiagnosticoCloudinary = ({
+  etapa,
+  uri,
+  mime,
+  status,
+  mensagem,
+}: {
+  etapa: string;
+  uri?: string;
+  mime?: string;
+  status?: number;
+  mensagem?: string;
+}) => ({
+  metodo: 'cloudinary-formdata',
+  etapa,
+  esquemaUri: obterEsquemaUri(uri),
+  mime,
+  status,
+  mensagem,
+  plataforma: Platform.OS,
+});
+
 export const descreverErroImagem = (erro: any, contexto: ContextoErroImagem = {}) => {
-  const code = typeof erro?.code === 'string' ? erro.code : 'storage/unknown';
+  const code = typeof erro?.code === 'string' ? erro.code : 'cloudinary/upload-failed';
   const message =
     typeof erro?.message === 'string' && erro.message.trim()
       ? erro.message
@@ -93,41 +123,50 @@ export const descreverErroImagem = (erro: any, contexto: ContextoErroImagem = {}
   const etapa = erro?.etapa || contexto.etapa || 'desconhecida';
   const mime = contexto.mime || erro?.mime;
   const uri = descreverUriSemCaminho(contexto.uri || erro?.uri);
+  const status =
+    typeof erro?.status === 'number'
+      ? erro.status
+      : typeof contexto.status === 'number'
+        ? contexto.status
+        : undefined;
 
-  let mensagemUsuario = 'Não foi possível enviar a capa para o Firebase Storage.';
-  if (code === 'storage/unauthenticated') {
-    mensagemUsuario = 'Você precisa estar logado para enviar uma capa.';
-  } else if (code === 'storage/unauthorized') {
-    mensagemUsuario = 'O Firebase Storage bloqueou o envio da capa pelas regras de segurança.';
-  } else if (code === 'storage/bucket-not-found') {
-    mensagemUsuario = 'O bucket do Firebase Storage não foi encontrado ou não está configurado.';
-  } else if (code === 'storage/missing-bucket-config') {
-    mensagemUsuario = 'A configuração storageBucket do Firebase não está disponível no app.';
-  } else if (code === 'storage/invalid-image') {
-    mensagemUsuario = 'A imagem preparada não está em um formato aceito para upload.';
+  let mensagemUsuario = 'Não foi possível enviar a capa. Verifique a conexão e tente novamente.';
+  if (code === 'cloudinary/config-missing') {
+    mensagemUsuario = 'Configuração do Cloudinary ausente. Verifique as variáveis do ambiente.';
   } else if (code === 'image/invalid-uri') {
     mensagemUsuario = 'A imagem escolhida não possui um endereço local válido.';
   } else if (code === 'image/prepare-failed') {
     mensagemUsuario = 'Não foi possível preparar a imagem escolhida.';
-  } else if (code === 'image/blob-fetch-failed') {
-    mensagemUsuario = 'Não foi possível ler o arquivo local da capa.';
-  } else if (code === 'image/blob-xhr-failed') {
-    mensagemUsuario = 'Não foi possível ler o arquivo local da capa.';
-  } else if (code === 'storage/rest-upload-failed') {
-    mensagemUsuario = 'Não foi possível enviar a capa pelo Firebase Storage.';
+  } else if (code === 'cloudinary/invalid-response') {
+    mensagemUsuario = 'O Cloudinary respondeu sem os dados necessários da capa.';
   }
 
-  return { code, message, mensagemUsuario, etapa, plataforma: Platform.OS, uri, mime };
+  return { code, message, mensagemUsuario, etapa, plataforma: Platform.OS, uri, mime, status };
+};
+
+const calcularResize = (entrada: ImagemLivroEntrada) => {
+  const width = typeof entrada.width === 'number' && Number.isFinite(entrada.width) ? entrada.width : 0;
+  const height = typeof entrada.height === 'number' && Number.isFinite(entrada.height) ? entrada.height : 0;
+
+  if (width <= DIMENSAO_MAXIMA_CAPA && height <= DIMENSAO_MAXIMA_CAPA) return undefined;
+  if (width >= height && width > 0) return { width: DIMENSAO_MAXIMA_CAPA };
+  if (height > 0) return { height: DIMENSAO_MAXIMA_CAPA };
+  return { width: DIMENSAO_MAXIMA_CAPA };
 };
 
 export const prepararImagemLivro = async (
-  uri: string,
+  entrada: string | ImagemLivroEntrada,
   onProgress?: (progresso: number) => void
 ): Promise<ImagemLivroResultado> => {
+  const dadosEntrada: ImagemLivroEntrada =
+    typeof entrada === 'string' ? { uri: entrada, mimeType: 'image/jpeg' } : entrada;
+  const { uri } = dadosEntrada;
+
   if (!uri || !/^(file|content|asset):\/\//.test(uri)) {
     throw criarErroImagem('image/invalid-uri', 'URI local da imagem inválida ou incompatível.', undefined, {
       etapa: 'validacao-uri',
       uri,
+      mime: dadosEntrada.mimeType,
     });
   }
 
@@ -136,21 +175,23 @@ export const prepararImagemLivro = async (
   let imagem;
   try {
     const context = ImageManipulator.manipulate(uri);
-    context.resize({ width: 420 });
+    const resize = calcularResize(dadosEntrada);
+    if (resize) context.resize(resize);
     imagem = await context.renderAsync();
   } catch (e) {
     throw criarErroImagem('image/prepare-failed', 'Falha ao redimensionar a imagem local.', e, {
       etapa: 'redimensionar',
       uri,
+      mime: dadosEntrada.mimeType,
     });
   }
 
-  onProgress?.(0.65);
+  onProgress?.(0.7);
 
   let imagemComprimida: { uri?: string };
   try {
     imagemComprimida = await imagem.saveAsync({
-      compress: 0.55,
+      compress: 0.75,
       format: SaveFormat.JPEG,
     });
   } catch (e) {
@@ -177,269 +218,155 @@ export const prepararImagemLivro = async (
   };
 };
 
-const lerBlobLocalViaXhr = async (uri: string): Promise<Blob> =>
-  new Promise<Blob>((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
+const validarRespostaCloudinary = (
+  resposta: CloudinaryResposta,
+  contexto: ContextoErroImagem
+): ImagemLivroUpload => {
+  const secureUrl = texto(resposta.secure_url);
+  const publicId = texto(resposta.public_id);
 
-    xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) {
-        resolve(xhr.response);
-      } else {
-        reject(criarErroImagem(
-          'image/blob-xhr-failed',
-          `Falha ao ler imagem local: HTTP ${xhr.status}`,
-          undefined,
-          {
-            etapa: 'uri-para-blob-xhr',
-            uri,
-          }
-        ));
-      }
-    };
-
-    xhr.onerror = () => {
-      reject(criarErroImagem(
-        'image/blob-xhr-failed',
-        'Falha ao converter a URI local em Blob',
-        undefined,
-        {
-          etapa: 'uri-para-blob-xhr',
-          uri,
-        }
-      ));
-    };
-
-    xhr.responseType = 'blob';
-    xhr.open('GET', uri, true);
-    xhr.send(null);
-  });
-
-const enviarBlobPorRest = async (
-  blob: Blob,
-  imagem: ImagemLivroResultado,
-  storagePath: string
-): Promise<ImagemLivroUpload> => {
-  const usuario = auth.currentUser;
-  if (!usuario) {
-    throw criarErroImagem('storage/unauthenticated', 'Usuário não autenticado para upload no Storage.', undefined, {
-      etapa: 'autenticacao-rest',
-      uri: imagem.uri,
-      mime: imagem.contentType,
-    });
+  if (!secureUrl || !publicId) {
+    throw criarErroImagem(
+      'cloudinary/invalid-response',
+      'Resposta do Cloudinary sem secure_url ou public_id.',
+      undefined,
+      contexto
+    );
   }
 
-  const bucket = obterBucketStorage();
-  if (!bucket) {
-    throw criarErroImagem('storage/missing-bucket-config', 'Configuração storageBucket ausente no Firebase.', undefined, {
-      etapa: 'configuracao-storage-rest',
-      uri: imagem.uri,
-      mime: imagem.contentType,
-    });
+  if (resposta.resource_type && resposta.resource_type !== 'image') {
+    throw criarErroImagem(
+      'cloudinary/invalid-response',
+      `Resposta do Cloudinary com resource_type inválido: ${resposta.resource_type}`,
+      undefined,
+      contexto
+    );
   }
-
-  const token = await usuario.getIdToken();
-  const contentType = imagem.contentType || 'image/jpeg';
-  const endpoint =
-    `https://firebasestorage.googleapis.com/v0/b/${encodeURIComponent(bucket)}/o?name=${encodeURIComponent(storagePath)}`;
-
-  const resposta = await new Promise<any>((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-
-    xhr.onload = () => {
-      const ok = xhr.status >= 200 && xhr.status < 300;
-      if (ok) {
-        resolve(xhr.response || {});
-        return;
-      }
-
-      reject(criarErroImagem(
-        'storage/rest-upload-failed',
-        `Falha no upload REST do Firebase Storage: HTTP ${xhr.status}`,
-        undefined,
-        {
-          etapa: 'upload-storage-rest',
-          uri: imagem.uri,
-          mime: contentType,
-        }
-      ));
-    };
-
-    xhr.onerror = () => {
-      reject(criarErroImagem(
-        'storage/rest-upload-failed',
-        'Falha de rede no upload REST do Firebase Storage.',
-        undefined,
-        {
-          etapa: 'upload-storage-rest',
-          uri: imagem.uri,
-          mime: contentType,
-        }
-      ));
-    };
-
-    xhr.responseType = 'json';
-    xhr.open('POST', endpoint, true);
-    xhr.setRequestHeader('Authorization', `Firebase ${token}`);
-    xhr.setRequestHeader('Content-Type', contentType);
-    xhr.send(blob);
-  });
-
-  const downloadTokens =
-    typeof resposta?.downloadTokens === 'string'
-      ? resposta.downloadTokens
-      : typeof resposta?.metadata?.firebaseStorageDownloadTokens === 'string'
-        ? resposta.metadata.firebaseStorageDownloadTokens
-        : '';
-  const downloadToken = downloadTokens.split(',').find(Boolean);
-  const url = downloadToken
-    ? `https://firebasestorage.googleapis.com/v0/b/${encodeURIComponent(bucket)}/o/${encodeURIComponent(storagePath)}?alt=media&token=${encodeURIComponent(downloadToken)}`
-    : await getDownloadURL(ref(storage, storagePath));
 
   return {
-    url,
-    storagePath,
-    metodo: 'storage-rest',
+    url: secureUrl,
+    publicId,
+    width: typeof resposta.width === 'number' ? resposta.width : undefined,
+    height: typeof resposta.height === 'number' ? resposta.height : undefined,
+    format: texto(resposta.format) || undefined,
+    bytes: typeof resposta.bytes === 'number' ? resposta.bytes : undefined,
   };
 };
 
 export const enviarImagemLivro = async (
   imagem: ImagemLivroResultado,
-  storagePath = criarCaminhoCapaLivro(),
+  _destinoLegado?: string,
   onProgress?: (progresso: number) => void
 ): Promise<ImagemLivroUpload> => {
-  if (!auth.currentUser) {
-    throw criarErroImagem('storage/unauthenticated', 'Usuário não autenticado para upload no Storage.', undefined, {
-      etapa: 'autenticacao',
-      uri: imagem.uri,
-      mime: imagem.contentType,
-    });
-  }
-  if (!storage.app.options.storageBucket) {
-    throw criarErroImagem('storage/missing-bucket-config', 'Configuração storageBucket ausente no Firebase.', undefined, {
-      etapa: 'configuracao-storage',
-      uri: imagem.uri,
-      mime: imagem.contentType,
-    });
-  }
+  const { cloudName, uploadPreset } = obterConfigCloudinary();
+
   if (!imagem.uri || !imagem.contentType?.startsWith('image/')) {
-    throw criarErroImagem('storage/invalid-image', 'Imagem preparada em formato inválido para upload.', undefined, {
-      etapa: 'validacao-upload',
+    throw criarErroImagem('cloudinary/invalid-image', 'Imagem preparada em formato inválido para upload.', undefined, {
+      etapa: 'validacao-upload-cloudinary',
       uri: imagem.uri,
       mime: imagem.contentType,
     });
   }
 
-  const imagemRef = ref(storage, storagePath);
-  let blob: Blob | undefined;
+  const endpoint = `https://api.cloudinary.com/v1_1/${encodeURIComponent(cloudName)}/image/upload`;
+  const formData = new FormData();
+  formData.append('file', {
+    uri: imagem.uri,
+    type: imagem.contentType || 'image/jpeg',
+    name: gerarNomeArquivoCapa(),
+  } as any);
+  formData.append('upload_preset', uploadPreset);
 
+  console.log('Upload de capa: enviando para Cloudinary.', criarDiagnosticoCloudinary({
+    etapa: 'upload-cloudinary',
+    uri: imagem.uri,
+    mime: imagem.contentType,
+  }));
+
+  let respostaHttp: Response;
+  onProgress?.(0.1);
   try {
-    onProgress?.(0.1);
-    blob = await lerBlobLocalViaXhr(imagem.uri);
-    onProgress?.(0.45);
-
-    if (typeof blob.size === 'number' && blob.size <= 0) {
-      throw criarErroImagem('image/blob-xhr-failed', 'Arquivo local da capa veio vazio.', undefined, {
-        etapa: 'uri-para-blob-xhr',
-        uri: imagem.uri,
-        mime: imagem.contentType,
-      });
-    }
-
-    console.log('Upload de capa: Blob local preparado.', criarDiagnosticoUpload({
-      metodo: 'xhr-blob',
-      uri: imagem.uri,
-      mime: imagem.contentType,
-      blob,
-      etapa: 'uri-para-blob-xhr',
-    }));
-  } catch (e: any) {
-    if (e?.code) throw e;
-    throw criarErroImagem('image/blob-xhr-failed', 'Falha ao ler a URI local como Blob.', e, {
-      etapa: 'uri-para-blob-xhr',
-      uri: imagem.uri,
-      mime: imagem.contentType,
+    respostaHttp = await fetch(endpoint, {
+      method: 'POST',
+      body: formData,
     });
-  }
-
-  try {
-    onProgress?.(0.7);
-    console.log('Upload de capa: tentando Firebase SDK.', criarDiagnosticoUpload({
-      metodo: 'xhr-blob',
-      uri: imagem.uri,
-      mime: imagem.contentType,
-      blob,
-      etapa: 'upload-storage-sdk',
-    }));
-
-    await uploadBytes(imagemRef, blob, {
-      contentType: imagem.contentType || 'image/jpeg',
-    });
-    onProgress?.(0.95);
-
-    return {
-      url: await getDownloadURL(imagemRef),
-      storagePath,
-      metodo: 'xhr-blob',
-    };
   } catch (e) {
-    const erroUpload = criarErroImagem(
-      (e as any)?.code || 'storage/unknown',
-      (e as any)?.message || 'Falha ao enviar Blob para o Firebase Storage.',
+    console.error('Falha de rede ao enviar capa para Cloudinary:', criarDiagnosticoCloudinary({
+      etapa: 'upload-cloudinary',
+      uri: imagem.uri,
+      mime: imagem.contentType,
+      mensagem: (e as any)?.message,
+    }));
+    throw criarErroImagem(
+      'cloudinary/network-failed',
+      (e as any)?.message || 'Falha de rede no upload para o Cloudinary.',
       e,
       {
-        etapa: 'upload-storage-sdk',
+        etapa: 'upload-cloudinary',
         uri: imagem.uri,
         mime: imagem.contentType,
       }
     );
+  }
 
-    console.error('Upload de capa: falha no Firebase SDK.', criarDiagnosticoUpload({
-      metodo: 'xhr-blob',
+  onProgress?.(0.75);
+
+  let respostaJson: CloudinaryResposta;
+  try {
+    respostaJson = await respostaHttp.json();
+  } catch (e) {
+    console.error('Falha ao ler resposta do Cloudinary:', criarDiagnosticoCloudinary({
+      etapa: 'parse-resposta-cloudinary',
       uri: imagem.uri,
       mime: imagem.contentType,
-      blob,
-      etapa: 'upload-storage-sdk',
-      erro: erroUpload,
+      status: respostaHttp.status,
+      mensagem: (e as any)?.message,
     }));
-
-    if (!erroIndicaConversaoArrayBuffer(erroUpload)) {
-      throw erroUpload;
-    }
-
-    console.log('Upload de capa: usando fallback REST.', criarDiagnosticoUpload({
-      metodo: 'storage-rest',
-      uri: imagem.uri,
-      mime: imagem.contentType,
-      blob,
-      etapa: 'upload-storage-rest',
-    }));
-
-    try {
-      const resultadoRest = await enviarBlobPorRest(blob, imagem, storagePath);
-      onProgress?.(0.95);
-      return resultadoRest;
-    } catch (erroRest) {
-      console.error('Upload de capa: falha no fallback REST.', criarDiagnosticoUpload({
-        metodo: 'storage-rest',
+    throw criarErroImagem(
+      'cloudinary/invalid-response',
+      'Resposta do Cloudinary não pôde ser interpretada.',
+      e,
+      {
+        etapa: 'parse-resposta-cloudinary',
         uri: imagem.uri,
         mime: imagem.contentType,
-        blob,
-        etapa: 'upload-storage-rest',
-        erro: erroRest,
-      }));
-      throw erroRest;
-    }
-  } finally {
-    (blob as any)?.close?.();
+        status: respostaHttp.status,
+      }
+    );
   }
+
+  if (!respostaHttp.ok) {
+    const mensagem = texto(respostaJson.error?.message) || `HTTP ${respostaHttp.status}`;
+    console.error('Cloudinary recusou upload da capa:', criarDiagnosticoCloudinary({
+      etapa: 'upload-cloudinary',
+      uri: imagem.uri,
+      mime: imagem.contentType,
+      status: respostaHttp.status,
+      mensagem,
+    }));
+    throw criarErroImagem('cloudinary/upload-failed', mensagem, undefined, {
+      etapa: 'upload-cloudinary',
+      uri: imagem.uri,
+      mime: imagem.contentType,
+      status: respostaHttp.status,
+    });
+  }
+
+  const resultado = validarRespostaCloudinary(respostaJson, {
+    etapa: 'validar-resposta-cloudinary',
+    uri: imagem.uri,
+    mime: imagem.contentType,
+    status: respostaHttp.status,
+  });
+  onProgress?.(1);
+  return resultado;
 };
 
-export const removerImagemLivro = async (storagePath?: string) => {
-  if (!storagePath) return;
+export const removerImagemLivro = async (identificador?: string) => {
+  if (!identificador) return;
 
-  try {
-    await deleteObject(ref(storage, storagePath));
-  } catch (e: any) {
-    if (e?.code !== 'storage/object-not-found') throw e;
-  }
+  console.log(
+    'Remoção de capa ignorada no cliente. Cloudinary destroy exige backend ou função serverless.',
+    { origem: identificador.includes('/') ? 'legado-ou-cloudinary' : 'desconhecida' }
+  );
 };
