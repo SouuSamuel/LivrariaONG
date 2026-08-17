@@ -69,6 +69,7 @@ export default function LivrosScreen({ route }: any) {
   const [carregandoMais, setCarregandoMais] = useState(false);
   const [imagemLocalUri, setImagemLocalUri] = useState<string | null>(null);
   const [imagemLocalInfo, setImagemLocalInfo] = useState<ImagemLivroEntrada | null>(null);
+  const [capaISBNNaoEncontrada, setCapaISBNNaoEncontrada] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [abrindoSeletorCapa, setAbrindoSeletorCapa] = useState(false);
   const ultimoScanRef = useRef<{ codigo: string; timestamp: number } | null>(null);
@@ -128,6 +129,7 @@ export default function LivrosScreen({ route }: any) {
       setForm({ isbn, codigoBarras: isbn, status: "Disponível" });
       setImagemLocalUri(null);
       setImagemLocalInfo(null);
+      setCapaISBNNaoEncontrada(false);
       setModalForm(true);
       buscarPorISBN(isbn);
     }
@@ -256,6 +258,7 @@ export default function LivrosScreen({ route }: any) {
     if (!montadoRef.current) return false;
 
     setImagemLocalUri(asset.uri);
+    setCapaISBNNaoEncontrada(false);
     setImagemLocalInfo({
       uri: asset.uri,
       mimeType: asset.mimeType || "image/jpeg",
@@ -376,6 +379,7 @@ export default function LivrosScreen({ route }: any) {
   const removerCapa = () => {
     setImagemLocalUri(null);
     setImagemLocalInfo(null);
+    setCapaISBNNaoEncontrada(false);
     setForm((f) => ({
       ...f,
       imagem: "",
@@ -391,6 +395,7 @@ export default function LivrosScreen({ route }: any) {
     setForm({});
     setImagemLocalUri(null);
     setImagemLocalInfo(null);
+    setCapaISBNNaoEncontrada(false);
   };
 
   const aplicarDadosISBN = (dados: Partial<Livro>) => {
@@ -439,8 +444,18 @@ export default function LivrosScreen({ route }: any) {
     try {
       const resultado = await buscarLivroPorISBN(isbn.codigo);
       if (resultado?.encontrado && resultado.dados) {
+        const temCapa = Boolean(resultado.dados.imagem?.startsWith("https://"));
+        console.log("Busca ISBN concluída:", {
+          isbn: isbn.codigo,
+          fontes: resultado.fontes,
+          imagemFonte: resultado.imagemFonte,
+          candidatasCapa: resultado.diagnosticoCapas.candidatas,
+          rejeicoesCapa: resultado.diagnosticoCapas.rejeicoes.length,
+        });
         aplicarDadosISBN(resultado.dados);
+        setCapaISBNNaoEncontrada(!temCapa);
       } else {
+        setCapaISBNNaoEncontrada(false);
         Alert.alert(
           "Livro não encontrado",
           `ISBN: ${isbn.codigo}\n\nNão encontramos esse livro nas fontes públicas. Você pode preencher manualmente.`
@@ -476,6 +491,7 @@ export default function LivrosScreen({ route }: any) {
     setModalForm(true);
     setImagemLocalUri(null);
     setImagemLocalInfo(null);
+    setCapaISBNNaoEncontrada(false);
     void limparRascunhoCadastroLivro();
 
     console.log("Código lido:", data);
@@ -674,6 +690,7 @@ export default function LivrosScreen({ route }: any) {
             setForm({ status: "Disponível" });
             setImagemLocalUri(null);
             setImagemLocalInfo(null);
+            setCapaISBNNaoEncontrada(false);
             setModalForm(true);
           }}
         >
@@ -847,7 +864,9 @@ export default function LivrosScreen({ route }: any) {
           ) : (
             <View style={[s.capaPreview, s.capaPreviewVazia]}>
               <Text style={{ fontSize: 42 }}>📖</Text>
-              <Text style={{ color: "#888", marginTop: 6 }}>Sem capa</Text>
+              <Text style={{ color: "#888", marginTop: 6 }}>
+                {capaISBNNaoEncontrada ? "Capa não encontrada" : "Sem capa"}
+              </Text>
             </View>
           )}
 
